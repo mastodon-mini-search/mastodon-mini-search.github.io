@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import createIndex from './createIndex'
-import { StatusStore, StatusDocument } from '../models/StatusStore'
+import createIndex from '../../src/functions/createIndex'
+import { StatusStore, StatusDocument } from '../../src/models/StatusStore'
 
 function storeWith(contents: Record<string, string>): StatusStore {
   const statuses: Record<string, StatusDocument> = {}

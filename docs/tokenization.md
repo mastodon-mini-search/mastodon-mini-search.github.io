@@ -3,7 +3,7 @@
 本文档描述本项目搜索的文本处理契约。它是 `src/functions/tokenize.ts`、
 `src/functions/stripHTML.ts`、`src/functions/normalizeChinese.ts`、
 `src/functions/isCJKWord.ts` 的行为说明，并由
-`src/functions/*.spec.ts` 中的测试强制约束。
+`tests/functions/*.spec.ts` 中的测试强制约束。
 
 ## 设计目标
 
@@ -88,7 +88,7 @@ Mastodon 正文是 HTML（`<p>` 分段、`<br>`、`<a>` 提及/标签等）。`s
 - 逐字符判定：CJK 看归一化后的单字 / bigram 是否命中，latin 段按整段
   NFKC + 小写比对，再把相邻命中字符合并成 `<mark>`。
 
-由 `src/functions/highlight.spec.ts` 约束。
+由 `tests/functions/highlight.spec.ts` 约束。
 
 ## 运行测试
 
@@ -100,7 +100,7 @@ npm run test:watch
 测试在 `happy-dom` 环境下运行，以便 `stripHTML` / `createIndex` 使用的 DOM API
 （`document.createElement` 等）可在 Node 下工作。规格文件：
 
-- `src/functions/tokenize.spec.ts`
-- `src/functions/stripHTML.spec.ts`
-- `src/functions/highlight.spec.ts`
-- `src/functions/createIndex.spec.ts`（端到端检索）
+- `tests/functions/tokenize.spec.ts`
+- `tests/functions/stripHTML.spec.ts`
+- `tests/functions/highlight.spec.ts`
+- `tests/functions/createIndex.spec.ts`（端到端检索）

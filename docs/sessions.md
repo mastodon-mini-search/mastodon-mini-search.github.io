@@ -2,7 +2,7 @@
 
 本文档描述本项目的本地存储与多账号会话契约。它是
 `src/functions/sessions.ts`、`src/models/Session.ts` 的行为说明，并由
-`src/functions/sessions.spec.ts` 中的测试强制约束。
+`tests/functions/sessions.spec.ts` 中的测试强制约束。
 
 ## 设计目标
 
@@ -60,5 +60,5 @@ interface SessionRegistry {
 npm test
 ```
 
-规格文件：`src/functions/sessions.spec.ts`（内存 `KeyValueStore` + 桩
+规格文件：`tests/functions/sessions.spec.ts`（内存 `KeyValueStore` + 桩
 `resolve`，覆盖增删、非破坏切换、跨实例不撞键、遗留迁移）。

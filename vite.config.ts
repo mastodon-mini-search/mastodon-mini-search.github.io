@@ -8,6 +8,6 @@ export default defineConfig({
     // stripHTML / createIndex use the DOM (document.createElement); happy-dom
     // provides a lightweight DOM so these run under Node.
     environment: 'happy-dom',
-    include: ['src/**/*.spec.ts'],
+    include: ['tests/**/*.spec.ts'],
   },
 })

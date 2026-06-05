@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { SessionRepository, KeyValueStore, storeKey } from './sessions'
-import { ResolvedAccountSetting } from '../models/AccountSetting'
-import { SessionRegistry } from '../models/Session'
-import { StatusStore } from '../models/StatusStore'
+import { SessionRepository, KeyValueStore, storeKey } from '../../src/functions/sessions'
+import { ResolvedAccountSetting } from '../../src/models/AccountSetting'
+import { SessionRegistry } from '../../src/models/Session'
+import { StatusStore } from '../../src/models/StatusStore'
 
 // In-memory KeyValueStore so the session logic runs without IndexedDB.
 function memoryKv(): KeyValueStore & { map: Map<string, unknown> } {

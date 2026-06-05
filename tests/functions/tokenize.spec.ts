@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import tokenize from './tokenize'
+import tokenize from '../../src/functions/tokenize'
 
 describe('tokenize', () => {
   it('splits a CJK run into unigrams followed by bigrams', () => {

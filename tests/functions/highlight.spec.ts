@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import highlight from './highlight'
+import highlight from '../../src/functions/highlight'
 
 describe('highlight', () => {
   it('highlights a CJK bigram match', () => {

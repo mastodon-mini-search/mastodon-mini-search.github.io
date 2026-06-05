@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import stripHTML from './stripHTML'
+import stripHTML from '../../src/functions/stripHTML'
 
 describe('stripHTML', () => {
   it('keeps a separator between adjacent block elements', () => {
