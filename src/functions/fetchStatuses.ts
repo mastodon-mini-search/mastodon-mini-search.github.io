@@ -1,6 +1,6 @@
 import { createRestAPIClient, mastodon } from "masto"
 import { StatusStore, StatusType } from "../models/StatusStore"
-import saveStore from "./saveStore"
+import sessions from "./sessions"
 
 function saveStatus(store: StatusStore, status: mastodon.v1.Status) {
   if (store.statuses[status.uri]) {
@@ -54,5 +54,5 @@ export default async function (store: StatusStore, afterBatch?: () => void) {
       }
     }
   }
-  await saveStore(store)
+  await sessions.saveStore(store)
 }

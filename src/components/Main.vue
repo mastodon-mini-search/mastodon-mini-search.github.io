@@ -13,8 +13,7 @@
 import Setup from "./Setup.vue"
 import { shallowRef, ShallowRef, reactive } from "vue"
 import { StatusStore } from "../models/StatusStore"
-import loadStore from "../functions/loadStore"
-import saveStore from "../functions/saveStore"
+import sessions from "../functions/sessions"
 import Loader from './Loader.vue'
 import MiniSearch, { SearchResult } from 'minisearch'
 import Filter from './Filter.vue'
@@ -23,9 +22,8 @@ import Results from './Results.vue'
 import createIndex from '../functions/createIndex'
 import FilterState from '../models/FilterState'
 import BlockingButton from './BlockingButton.vue'
-import deleteStore from '../functions/deleteStore'
 
-const store: ShallowRef<StatusStore | undefined> = shallowRef(await loadStore())
+const store: ShallowRef<StatusStore | undefined> = shallowRef(await sessions.loadActiveStore())
 const index: ShallowRef<MiniSearch | undefined> = shallowRef(undefined)
 const filter: FilterState = reactive({
   post: true,
@@ -40,12 +38,12 @@ if (store.value) {
 }
 
 function saveStoreCreated(storeCreated: StatusStore) {
-  saveStore(storeCreated)
+  // addSession already persisted it; just show it.
   store.value = storeCreated
 }
 
 function saveStoreAndIndex(storeToSave: StatusStore, indexToSave: MiniSearch) {
-  saveStore(storeToSave)
+  sessions.saveStore(storeToSave)
   store.value = storeToSave
   index.value = indexToSave
 }
@@ -55,8 +53,13 @@ function saveResults(rs: SearchResult[]) {
 }
 
 async function logOut() {
-  await deleteStore()
+  const activeKey = await sessions.getActiveKey()
+  if (activeKey) {
+    await sessions.removeSession(activeKey)
+  }
   store.value = undefined
+  index.value = undefined
+  results.value = []
 }
 </script>
 

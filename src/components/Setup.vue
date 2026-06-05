@@ -11,7 +11,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import setupStore from '../functions/setupStore'
+import sessions from '../functions/sessions'
 import { StatusStore } from '../models/StatusStore'
 import BlockingButton from './BlockingButton.vue'
 
@@ -21,7 +21,7 @@ const emit = defineEmits<{
 
 const acct = ref('')
 async function save() {
-  const store = await setupStore(acct.value)
+  const store = await sessions.addSession(acct.value)
   emit('setupComplete', store)
 }
 </script>
