@@ -2,7 +2,22 @@ import { createRestAPIClient, mastodon } from "masto"
 import { StatusStore, StatusType } from "../models/StatusStore"
 import sessions from "./sessions"
 
+function saveAuthor(store: StatusStore, account: mastodon.v1.Account) {
+  if (!store.authors) {
+    store.authors = {}
+  }
+  // Unconditional upsert (even if the toot was already stored) so avatar /
+  // display name stay current as the author updates them.
+  store.authors[account.acct] = {
+    acct: account.acct,
+    displayName: account.displayName,
+    avatar: account.avatarStatic,
+    url: account.url
+  }
+}
+
 function saveStatus(store: StatusStore, status: mastodon.v1.Status) {
+  saveAuthor(store, status.account)
   if (store.statuses[status.uri]) {
 
   } else {

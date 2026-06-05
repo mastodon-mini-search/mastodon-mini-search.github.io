@@ -28,8 +28,22 @@ export interface LoadedPosition {
   bookmarkMinId: string
 }
 
+// Author info, normalized out of StatusDocument (which keeps `acct` as the
+// foreign key). Keyed by acct: local authors are `username`, remote ones
+// `username@domain`, so it's unique within one home-instance store. Upserted on
+// every fetch, so avatars/display names stay current.
+export interface AuthorInfo {
+  acct: string
+  displayName: string
+  avatar: string   // avatarStatic — never animated
+  url: string      // profile permalink
+}
+
 export interface StatusStore {
   account: ResolvedAccountSetting
   position: LoadedPosition,
   statuses: Record<string, StatusDocument>
+  // Optional: absent on stores written before authors were captured. Read
+  // defensively and fall back to the bare `acct`.
+  authors?: Record<string, AuthorInfo>
 }
