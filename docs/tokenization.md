@@ -73,8 +73,20 @@ Mastodon 正文是 HTML（`<p>` 分段、`<br>`、`<a>` 提及/标签等）。`s
 - **韩文**：谚文音节不在 CJK 区间，按非 CJK 整词处理（无 bigram）。
 - **拼音搜索**：尚未支持。可为每个 CJK 字额外索引拼音 token 实现
   `jisuanji` → `计算机`，属独立特性。
-- **搜索结果高亮**：尚未实现；若实现，高亮器必须复用同一套 normalize/分词逻辑
-  （繁简、bigram、NFKC），否则与命中结果对不齐。
+
+## 搜索结果高亮（highlight）
+
+`src/functions/highlight.ts` 把命中词包进 `<mark>`，由 `ResultItem.vue` 使用。
+
+- 输入是 MiniSearch `SearchResult.terms`（已在规范空间：简体 + NFKC + 小写）。
+- **只遍历文本节点**，绝不改动标签或属性，因此既不会破坏 HTML 也不会注入；
+  `href` 里出现的词不会被高亮。
+- 复用与索引**同一套** `normalizeChinese` / `isCJKWord`：因此能跨繁简
+  （命中词 `电脑` 能高亮正文里的 `電腦`）、跨全角（`2024` 高亮 `２０２４`）对齐。
+- 逐字符判定：CJK 看归一化后的单字 / bigram 是否命中，latin 段按整段
+  NFKC + 小写比对，再把相邻命中字符合并成 `<mark>`。
+
+由 `src/functions/highlight.spec.ts` 约束。
 
 ## 运行测试
 
@@ -88,4 +100,5 @@ npm run test:watch
 
 - `src/functions/tokenize.spec.ts`
 - `src/functions/stripHTML.spec.ts`
+- `src/functions/highlight.spec.ts`
 - `src/functions/createIndex.spec.ts`（端到端检索）

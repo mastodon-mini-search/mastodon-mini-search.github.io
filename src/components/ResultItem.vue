@@ -1,6 +1,6 @@
 <template>
   <article>
-    <main v-html="status.content"></main>
+    <main v-html="highlighted"></main>
     <div class="meta">
       <a :href="link" target="_blank">原文</a> 來自 <a :href="authorLink" target="_blank">@{{ status.acct }}</a>
     </div>
@@ -12,6 +12,7 @@
 import { StatusStore } from '../models/StatusStore'
 import { SearchResult } from 'minisearch'
 import { computed } from 'vue'
+import highlight from '../functions/highlight'
 
 const props = defineProps<{
   result: SearchResult
@@ -19,6 +20,7 @@ const props = defineProps<{
 }>()
 
 const status = computed(() => props.store.statuses[props.result.id])
+const highlighted = computed(() => highlight(status.value.content, props.result.terms))
 const link = computed(() => `${props.store.account.instanceUrl}/@${status.value.acct}/${status.value.id}`)
 const authorLink = computed(() => `${props.store.account.instanceUrl}/@${status.value.acct}`)
 /*
@@ -41,5 +43,11 @@ main {
 }
 .meta {
   margin-top: 0.5rem;
+}
+/* v-html content is not scoped, so reach into it with :deep(). */
+main :deep(mark) {
+  background: #fde68a;
+  color: inherit;
+  border-radius: 2px;
 }
 </style>
