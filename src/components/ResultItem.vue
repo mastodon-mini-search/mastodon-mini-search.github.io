@@ -1,6 +1,12 @@
 <template>
   <article>
+    <p v-if="status.spoilerText" class="cw">⚠ {{ status.spoilerText }}</p>
     <main v-html="highlighted"></main>
+    <div v-if="media.length > 0" class="media">
+      <a v-for="(m, i) in media" :key="i" :href="m.url || link" target="_blank" class="thumb">
+        <img :src="m.previewUrl" :alt="m.description || ''" :title="m.description || ''">
+      </a>
+    </div>
     <div class="meta">
       <a :href="link" target="_blank">原文</a> 來自 <a :href="authorLink" target="_blank">@{{ status.acct }}</a>
     </div>
@@ -21,7 +27,10 @@ const props = defineProps<{
 
 const status = computed(() => props.store.statuses[props.result.id])
 const highlighted = computed(() => highlight(status.value.content, props.result.terms))
-const link = computed(() => `${props.store.account.instanceUrl}/@${status.value.acct}/${status.value.id}`)
+const media = computed(() => status.value.media ?? [])
+// Prefer the canonical permalink; fall back to a constructed one for toots
+// stored before `url` was captured.
+const link = computed(() => status.value.url || `${props.store.account.instanceUrl}/@${status.value.acct}/${status.value.id}`)
 const authorLink = computed(() => `${props.store.account.instanceUrl}/@${status.value.acct}`)
 /*
 const typeNames = {
@@ -40,6 +49,27 @@ main {
   -webkit-line-clamp: 5;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+.cw {
+  margin: 0 0 0.5rem;
+  padding: 0.25rem 0.5rem;
+  font-weight: 600;
+  color: #92400e;
+  background: #fef3c7;
+  border-radius: 4px;
+}
+.media {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.thumb img {
+  display: block;
+  height: 5rem;
+  width: auto;
+  border-radius: 6px;
+  object-fit: cover;
 }
 .meta {
   margin-top: 0.5rem;

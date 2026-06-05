@@ -11,7 +11,15 @@ function saveStatus(store: StatusStore, status: mastodon.v1.Status) {
       createdAt: status.createdAt,
       types: [],
       acct: status.account.acct,
-      id: status.id
+      id: status.id,
+      url: status.url ?? null,
+      spoilerText: status.spoilerText,
+      media: status.mediaAttachments.map(m => ({
+        type: m.type,
+        url: m.url ?? '',
+        previewUrl: m.previewUrl,
+        description: m.description ?? null
+      }))
     }
   }
 }

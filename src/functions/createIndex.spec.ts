@@ -42,4 +42,20 @@ describe('createIndex (end-to-end search)', () => {
     // "计算机" needs the 算机 bigram, which only doc a has.
     expect(ids(store, '计算机')).toEqual(['a'])
   })
+
+  it('indexes the content warning and media alt text', () => {
+    const store: StatusStore = {
+      account: {} as never,
+      position: {} as never,
+      statuses: {
+        a: {
+          content: '<p>普通正文</p>', createdAt: '', types: ['post'], acct: 't', id: 'a',
+          spoilerText: '剧透警告',
+          media: [{ type: 'image', url: '', previewUrl: '', description: '一只橘猫' }]
+        }
+      }
+    }
+    expect(ids(store, '剧透')).toContain('a')   // found via the CW
+    expect(ids(store, '橘猫')).toContain('a')   // found via the image alt text
+  })
 })

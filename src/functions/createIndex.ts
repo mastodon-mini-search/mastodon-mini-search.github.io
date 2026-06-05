@@ -19,9 +19,20 @@ export default function(store: StatusStore) {
     }
   })
   Object.entries(store.statuses).forEach(([uri, status]) => {
+    // Index the body plus the content warning and any media alt text, so a
+    // toot is findable by its CW or by what's written in an image's alt.
+    const parts = [stripHTML(status.content)]
+    if (status.spoilerText) {
+      parts.push(status.spoilerText)
+    }
+    for (const m of status.media ?? []) {
+      if (m.description) {
+        parts.push(m.description)
+      }
+    }
     miniSearch.add({
       uri: uri,
-      content: stripHTML(status.content)
+      content: parts.join(' ')
     })
   })
   return miniSearch
