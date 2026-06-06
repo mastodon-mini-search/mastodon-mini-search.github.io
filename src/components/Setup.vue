@@ -43,8 +43,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import sessions from '../functions/sessions'
-import { StatusStore } from '../models/StatusStore'
+import { useSessions } from '../composables/useSessions'
 import { beginLogin } from '../functions/oauth'
 
 // `cancelable` is set when there's already an active account (the switcher's
@@ -54,9 +53,12 @@ defineProps<{
   cancelable?: boolean
 }>()
 const emit = defineEmits<{
-  (e: 'setupComplete', store: StatusStore): void
   (e: 'cancel'): void
 }>()
+
+// The browse path adds the account and makes it active; Main reacts to the
+// active store changing (dismissing this screen, building the index).
+const { addByHandle } = useSessions()
 
 const acct = ref('')
 // Which action is in flight (disables the form), or '' when idle.
@@ -93,7 +95,7 @@ async function browse() {
   busy.value = 'browse'
   error.value = ''
   try {
-    emit('setupComplete', await sessions.addSession(input))
+    await addByHandle(input)
   } catch {
     error.value = '找不到這個帳號，請確認 ID 是否正確'
     busy.value = ''

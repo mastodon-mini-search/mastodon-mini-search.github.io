@@ -14,7 +14,7 @@
     <div v-if="open" class="menu" role="menu">
       <p class="label">帳號</p>
       <button
-        v-for="a in known"
+        v-for="a in accounts"
         :key="keyOf(a)"
         type="button"
         class="row"
@@ -22,7 +22,7 @@
         role="menuitemradio"
         :aria-checked="keyOf(a) === activeKey"
         :disabled="busy"
-        @click="switchTo(a)"
+        @click="switchAccount(a)"
       >
         <span class="check" aria-hidden="true">{{ keyOf(a) === activeKey ? '✓' : '' }}</span>
         <span class="acct">@{{ a.acct }}</span>
@@ -43,24 +43,25 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import sessions, { storeKey } from '../functions/sessions'
+import { storeKey } from '../functions/sessions'
 import { ResolvedAccountSetting } from '../models/AccountSetting'
-import { StatusStore } from '../models/StatusStore'
+import { useSessions } from '../composables/useSessions'
 
 const props = defineProps<{
   account: ResolvedAccountSetting
 }>()
-// One event for every kind of change: the new active store, or undefined when
-// the last account was removed. Main owns rebuilding the index from it. `add`
-// asks Main to open the full Setup screen for a new account (login or browse).
+// `add` asks Main to open the full Setup screen for a new account (login or
+// browse). Switching and removing go straight through useSessions — the active
+// store is shared, so there's no result to hand back to Main.
 const emit = defineEmits<{
-  (e: 'changed', store: StatusStore | undefined): void
   (e: 'add'): void
 }>()
 
+// The known accounts to list, the in-flight flag for disabling rows, and the
+// switch/remove operations all come from the shared session state.
+const { accounts, busy, switchTo, remove, refresh } = useSessions()
+
 const open = ref(false)
-const known = ref<ResolvedAccountSetting[]>([])
-const busy = ref(false)
 const root = ref<HTMLElement | null>(null)
 
 const keyOf = (a: ResolvedAccountSetting) => storeKey(a)
@@ -69,7 +70,7 @@ const activeKey = computed(() => storeKey(props.account))
 async function toggle() {
   open.value = !open.value
   if (open.value) {
-    known.value = await sessions.listSessions()
+    await refresh()
   }
 }
 
@@ -84,32 +85,19 @@ function openAdd() {
   emit('add')
 }
 
-async function switchTo(a: ResolvedAccountSetting) {
+async function switchAccount(a: ResolvedAccountSetting) {
   const key = keyOf(a)
   if (key === activeKey.value) {
     close()
     return
   }
-  busy.value = true
-  try {
-    await sessions.setActive(key)
-    emit('changed', await sessions.loadStore(key))
-    close()
-  } finally {
-    busy.value = false
-  }
+  await switchTo(key)
+  close()
 }
 
 async function removeCurrent() {
-  busy.value = true
-  try {
-    await sessions.removeSession(activeKey.value)
-    // Falls back to the first remaining account, or undefined when none are left.
-    emit('changed', await sessions.loadActiveStore())
-    close()
-  } finally {
-    busy.value = false
-  }
+  await remove()
+  close()
 }
 
 function onDocClick(e: MouseEvent) {

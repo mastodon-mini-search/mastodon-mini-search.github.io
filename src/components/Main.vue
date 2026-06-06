@@ -2,7 +2,6 @@
   <Setup
     v-if="!store || addingAccount"
     :cancelable="!!store"
-    @setupComplete="onSetupComplete"
     @cancel="addingAccount = false"
   />
 
@@ -12,7 +11,7 @@
         <span class="logo" aria-hidden="true">🔍</span>
         <span class="title">站外搜索</span>
       </div>
-      <AccountSwitcher :account="store.account" @changed="onAccountChanged" @add="startAddAccount"/>
+      <AccountSwitcher :account="store.account" @add="startAddAccount"/>
     </header>
 
     <Loader :key="accountKey" :store="store" @loadComplete="growIndex"/>
@@ -37,43 +36,56 @@
 
 <script setup lang="ts">
 import Setup from "./Setup.vue"
-import { shallowRef, ShallowRef, ref, computed } from "vue"
+import { ref, computed, watch } from "vue"
 import { StatusStore } from "../models/StatusStore"
-import sessions, { storeKey } from "../functions/sessions"
+import { storeKey } from "../functions/sessions"
 import Loader from './Loader.vue'
 import Filter from './Filter.vue'
 import Searcher from './Searcher.vue'
 import Results from './Results.vue'
 import AccountSwitcher from './AccountSwitcher.vue'
-import { completeLoginFromRedirect } from '../functions/oauth'
+import { useSessions } from '../composables/useSessions'
 import { useSearchIndex } from '../composables/useSearchIndex'
 import { useSearch } from '../composables/useSearch'
 
-const store: ShallowRef<StatusStore | undefined> = shallowRef(undefined)
-
-// The MiniSearch index for the active account (restore / build / grow / cache),
-// and the search state driven by it (live text, committed query, filter,
-// results). Both live in composables so Main only orchestrates account changes.
-// Created before the awaits below so their refs/onBeforeUnmount register during
-// synchronous setup.
+// The active account's store (shared with AccountSwitcher / Setup), the index
+// driven off it (restore / build / grow / cache), and the search state driven
+// off the index. All three live in composables so Main just wires them together
+// and reacts to the active account changing. `useSearch` registers an
+// onBeforeUnmount, so it must run before the awaits below, during synchronous setup.
+const { activeStore: store, bootstrap } = useSessions()
 const { index, load: loadIndex, grow: growIndex, clear: clearIndex } = useSearchIndex(store)
 const { text, query, results, filtered, searched, filter, runNow, reset } = useSearch(index, store)
 
 // When true, the Setup screen is shown on top of an existing session to add
 // another account (the switcher's "新增帳號" routes here instead of an inline
-// form). Reset once the new account lands or the user backs out.
+// form). Cleared by applyActiveStore once the new account lands, or by the
+// Setup screen's cancel.
 const addingAccount = ref(false)
 
 // Keys the per-account Loader so its counts reset when the active account changes.
 const accountKey = computed(() => (store.value ? storeKey(store.value.account) : ''))
 
-// Bootstrap: if this load is an OAuth callback, finish the login and make the
-// freshly authorized account active; otherwise resume the last active account.
-const authed = await completeLoginFromRedirect()
-store.value = authed ? await sessions.addResolvedSession(authed) : await sessions.loadActiveStore()
-if (store.value) {
-  await loadIndex(store.value)
+// React to the active account changing (bootstrap, switch, remove, or a new
+// account from Setup). Clear the previous search and index first — before any
+// re-render — so stale result ids can't be looked up against the new store and a
+// stale index can't be searched mid-switch. Then rebuild the index, but only
+// once the store actually holds toots: an empty store leaves the index undefined
+// so the UI shows the "load first" hint, and the first fetch builds it (growIndex).
+async function applyActiveStore(s: StatusStore | undefined) {
+  reset()
+  clearIndex()
+  addingAccount.value = false
+  if (s && Object.keys(s.statuses).length > 0) {
+    await loadIndex(s)
+  }
 }
+
+// Bootstrap (OAuth callback or resume), then load its index up front so the app
+// paints with search ready. Wire the watcher afterwards so this initial load
+// doesn't double-fire it; it then handles every later account change.
+await applyActiveStore(await bootstrap())
+watch(store, applyActiveStore)
 
 // The switcher asked to add an account: show the Setup screen over the current
 // session. Clear the active search first so backing out doesn't reveal a stale
@@ -81,43 +93,6 @@ if (store.value) {
 function startAddAccount() {
   reset()
   addingAccount.value = true
-}
-
-// Setup finished (no-login browse path; the OAuth path returns via the redirect
-// instead). addSession already persisted and activated the account. For the
-// first-run setup there's no prior account, so just show it. When adding on top
-// of an existing session, leave the add screen and swap to the new account the
-// same way the switcher does.
-function onSetupComplete(storeCreated: StatusStore) {
-  if (addingAccount.value) {
-    addingAccount.value = false
-    onAccountChanged(storeCreated)
-  } else {
-    store.value = storeCreated
-  }
-}
-
-// The switcher already performed the data-layer change (switch / add / remove);
-// here we just swap in the new active store — rebuilding its index and clearing
-// the previous search — or fall back to Setup when no account remains.
-async function onAccountChanged(s: StatusStore | undefined) {
-  if (!s) {
-    resetToSetup()
-    return
-  }
-  // Clear the previous account's search before swapping the store, so a
-  // re-render can't look up stale result ids against the new store. Drop the
-  // index too while it rebuilds, so a stale index can't be searched mid-switch.
-  reset()
-  clearIndex()
-  store.value = s
-  await loadIndex(s)
-}
-
-function resetToSetup() {
-  store.value = undefined
-  clearIndex()
-  reset()
 }
 </script>
 
