@@ -21,7 +21,10 @@
         <Searcher v-model="text" @submit="runNow"/>
         <div class="search-bar">
           <Filter :filter="filter"/>
-          <span v-if="searched" class="count">{{ filtered.length }} 條結果</span>
+          <div v-if="searched" class="results-meta">
+            <Sorter v-model="sort"/>
+            <span class="count">{{ filtered.length }} 條結果</span>
+          </div>
         </div>
       </section>
 
@@ -45,6 +48,7 @@ import { StatusStore } from "../models/StatusStore"
 import { storeKey } from "../functions/sessions"
 import Loader from './Loader.vue'
 import Filter from './Filter.vue'
+import Sorter from './Sorter.vue'
 import Searcher from './Searcher.vue'
 import Results from './Results.vue'
 import AccountSwitcher from './AccountSwitcher.vue'
@@ -59,7 +63,7 @@ import { useSearch } from '../composables/useSearch'
 // onBeforeUnmount, so it must run before the awaits below, during synchronous setup.
 const { activeStore: store, bootstrap } = useSessions()
 const { ready, building, search, load: loadIndex, grow: growIndex, clear: clearIndex } = useSearchIndex(store)
-const { text, query, results, filtered, searched, filter, runNow, reset } = useSearch(search, ready, store)
+const { text, query, results, filtered, searched, filter, sort, runNow, reset } = useSearch(search, ready, store)
 
 // When true, the Setup screen is shown on top of an existing session to add
 // another account (the switcher's "新增帳號" routes here instead of an inline
@@ -166,6 +170,11 @@ function startAddAccount() {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 0.5rem 0.75rem;
+}
+.results-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
 }
 .count {
   color: var(--text-muted);

@@ -2,6 +2,7 @@ import { ref, shallowRef, reactive, computed, watch, onBeforeUnmount, Ref } from
 import { SearchResult } from 'minisearch'
 import { StatusStore } from '../models/StatusStore'
 import FilterState from '../models/FilterState'
+import SortOrder from '../models/SortOrder'
 
 // Owns everything about turning the search box into a filtered result list: the
 // live box text, the committed query that produced the current results, the
@@ -32,14 +33,31 @@ export function useSearch(
     bookmark: false,
   })
 
-  // Filter the raw results by the active type toggles. Lives here (rather than
-  // inside Results) so the result count and empty states can react to it too.
+  // How the result list is ordered. Like `filter`, this persists across account
+  // switches (reset leaves it alone) — it's a viewing preference, not per-corpus.
+  const sort = ref<SortOrder>('relevance')
+
+  // Filter the raw results by the active type toggles, then order them. Lives here
+  // (rather than inside Results) so the result count and empty states can react to
+  // it too. `search` already returns matches sorted by score (descending), so
+  // 'relevance' is just the filtered list as-is; 'newest'/'oldest' reorder by
+  // createdAt (a same-format ISO UTC string, so a lexical compare is chronological).
   const filtered = computed(() => {
     const s = store.value
     if (!s) {
       return []
     }
-    return results.value.filter(r => s.statuses[r.id].types.some(t => filter[t]))
+    const matched = results.value.filter(r => s.statuses[r.id].types.some(t => filter[t]))
+    if (sort.value === 'relevance') {
+      return matched
+    }
+    const dir = sort.value === 'newest' ? -1 : 1
+    // matched is a fresh array from .filter(), so sorting it in place is safe.
+    return matched.sort((a, b) => {
+      const ta = s.statuses[a.id].createdAt
+      const tb = s.statuses[b.id].createdAt
+      return ta < tb ? -dir : ta > tb ? dir : 0
+    })
   })
 
   // Each run gets a token; only the latest may publish. The search resolves
@@ -84,8 +102,8 @@ export function useSearch(
 
   // Clear the search (e.g. when the active account changes), cancelling any
   // pending debounce and invalidating any in-flight run so a stale one can't
-  // repopulate results afterwards. Leaves the `filter` toggles alone — those
-  // persist across accounts, as before.
+  // repopulate results afterwards. Leaves the `filter` toggles and `sort` order
+  // alone — those are viewing preferences that persist across accounts, as before.
   function reset() {
     clearTimeout(timer)
     token++
@@ -95,5 +113,5 @@ export function useSearch(
     searched.value = false
   }
 
-  return { text, query, results, filtered, searched, filter, runNow, reset }
+  return { text, query, results, filtered, searched, filter, sort, runNow, reset }
 }

@@ -6,10 +6,12 @@ import createIndex from '../../src/functions/createIndex'
 import { StatusStore, StatusDocument, StatusType } from '../../src/models/StatusStore'
 import { withSetup, unmountAll } from './withSetup'
 
-function makeStore(docs: Record<string, { content: string; types: StatusType[] }>): StatusStore {
+function makeStore(
+  docs: Record<string, { content: string; types: StatusType[]; createdAt?: string }>,
+): StatusStore {
   const statuses: Record<string, StatusDocument> = {}
   for (const [uri, d] of Object.entries(docs)) {
-    statuses[uri] = { content: d.content, createdAt: '', types: d.types, acct: 'tester', id: uri }
+    statuses[uri] = { content: d.content, createdAt: d.createdAt ?? '', types: d.types, acct: 'tester', id: uri }
   }
   return {
     account: { instanceUrl: 'https://a.social', acct: 'tester', accountId: '1' },
@@ -19,6 +21,8 @@ function makeStore(docs: Record<string, { content: string; types: StatusType[] }
 }
 
 const ids = (rs: { id: string | number }[]) => rs.map(r => String(r.id)).sort()
+// Order-preserving variant, for asserting how the result list is sorted.
+const order = (rs: { id: string | number }[]) => rs.map(r => String(r.id))
 
 describe('useSearch', () => {
   let store: StatusStore
@@ -174,5 +178,57 @@ describe('useSearch', () => {
 
     await vi.advanceTimersByTimeAsync(500)
     expect(search).not.toHaveBeenCalled()
+  })
+
+  describe('sort order', () => {
+    // Three equally-matching posts at distinct times, so only the sort decides
+    // their order. All 'post' so the default type toggles keep every one.
+    function timedSearch() {
+      const s = makeStore({
+        a: { content: '<p>alpha</p>', types: ['post'], createdAt: '2024-01-01T00:00:00.000Z' },
+        b: { content: '<p>alpha</p>', types: ['post'], createdAt: '2024-03-01T00:00:00.000Z' },
+        c: { content: '<p>alpha</p>', types: ['post'], createdAt: '2024-02-01T00:00:00.000Z' },
+      })
+      const index = createIndex(s)
+      const localSearch = vi.fn((q: string) => Promise.resolve(index.search(q)))
+      return { storeRef: shallowRef<StatusStore | undefined>(s), localSearch }
+    }
+
+    it('defaults to relevance, keeping MiniSearch\'s own order', async () => {
+      const { storeRef: sRef, localSearch } = timedSearch()
+      const [{ text, results, filtered, sort, runNow }] =
+        withSetup(() => useSearch(localSearch, ready, sRef))
+
+      text.value = 'alpha'
+      await runNow()
+
+      expect(sort.value).toBe('relevance')
+      // Filtering preserves the score order search() returned — no reordering.
+      expect(order(filtered.value)).toEqual(order(results.value))
+    })
+
+    it('orders by createdAt, newest first', async () => {
+      const { storeRef: sRef, localSearch } = timedSearch()
+      const [{ text, filtered, sort, runNow }] =
+        withSetup(() => useSearch(localSearch, ready, sRef))
+
+      text.value = 'alpha'
+      await runNow()
+      sort.value = 'newest'
+
+      expect(order(filtered.value)).toEqual(['b', 'c', 'a'])
+    })
+
+    it('orders by createdAt, oldest first', async () => {
+      const { storeRef: sRef, localSearch } = timedSearch()
+      const [{ text, filtered, sort, runNow }] =
+        withSetup(() => useSearch(localSearch, ready, sRef))
+
+      text.value = 'alpha'
+      await runNow()
+      sort.value = 'oldest'
+
+      expect(order(filtered.value)).toEqual(['a', 'c', 'b'])
+    })
   })
 })
