@@ -15,7 +15,7 @@
       <AccountSwitcher :account="store.account" @changed="onAccountChanged" @add="startAddAccount"/>
     </header>
 
-    <Loader :key="accountKey" :store="store" @loadComplete="onFetched"/>
+    <Loader :key="accountKey" :store="store" @loadComplete="growIndex"/>
 
     <template v-if="index">
       <section class="search">
@@ -41,22 +41,22 @@ import { shallowRef, ShallowRef, ref, computed } from "vue"
 import { StatusStore } from "../models/StatusStore"
 import sessions, { storeKey } from "../functions/sessions"
 import Loader from './Loader.vue'
-import MiniSearch from 'minisearch'
 import Filter from './Filter.vue'
 import Searcher from './Searcher.vue'
 import Results from './Results.vue'
-import createIndex, { toPersistedIndex, restoreIndex, indexNewStatuses } from '../functions/createIndex'
 import AccountSwitcher from './AccountSwitcher.vue'
 import { completeLoginFromRedirect } from '../functions/oauth'
+import { useSearchIndex } from '../composables/useSearchIndex'
 import { useSearch } from '../composables/useSearch'
 
 const store: ShallowRef<StatusStore | undefined> = shallowRef(undefined)
-const index: ShallowRef<MiniSearch | undefined> = shallowRef(undefined)
 
-// Search state + behaviour (live box text, committed query, type filter,
-// debounce, filtered results) lives in one composable; this component only
-// wires it to the active index and clears it on account changes. Created before
-// the awaits below so its onBeforeUnmount registers during synchronous setup.
+// The MiniSearch index for the active account (restore / build / grow / cache),
+// and the search state driven by it (live text, committed query, filter,
+// results). Both live in composables so Main only orchestrates account changes.
+// Created before the awaits below so their refs/onBeforeUnmount register during
+// synchronous setup.
+const { index, load: loadIndex, grow: growIndex, clear: clearIndex } = useSearchIndex(store)
 const { text, query, results, filtered, searched, filter, runNow, reset } = useSearch(index, store)
 
 // When true, the Setup screen is shown on top of an existing session to add
@@ -72,20 +72,7 @@ const accountKey = computed(() => (store.value ? storeKey(store.value.account) :
 const authed = await completeLoginFromRedirect()
 store.value = authed ? await sessions.addResolvedSession(authed) : await sessions.loadActiveStore()
 if (store.value) {
-  index.value = await loadOrBuildIndex(store.value)
-}
-
-// Restore the cached index if one is stored and still valid; otherwise rebuild
-// from the toots and cache the result for next time.
-async function loadOrBuildIndex(s: StatusStore): Promise<MiniSearch> {
-  const cached = await sessions.loadIndex(s.account)
-  const restored = cached && restoreIndex(s, cached)
-  if (restored) {
-    return restored
-  }
-  const built = createIndex(s)
-  await sessions.saveIndex(s.account, toPersistedIndex(s, built))
-  return built
+  await loadIndex(store.value)
 }
 
 // The switcher asked to add an account: show the Setup screen over the current
@@ -110,25 +97,6 @@ function onSetupComplete(storeCreated: StatusStore) {
   }
 }
 
-// A fetch finished: the store was mutated in place and already persisted by
-// fetchStatuses. Grow the existing index with just the new toots — or build it
-// fresh if there's none yet (e.g. right after setup) — then re-cache it so the
-// next cold start can skip the rebuild.
-function onFetched() {
-  const s = store.value
-  if (!s) {
-    return
-  }
-  let idx = index.value
-  if (idx) {
-    indexNewStatuses(idx, s)
-  } else {
-    idx = createIndex(s)
-    index.value = idx
-  }
-  sessions.saveIndex(s.account, toPersistedIndex(s, idx))
-}
-
 // The switcher already performed the data-layer change (switch / add / remove);
 // here we just swap in the new active store — rebuilding its index and clearing
 // the previous search — or fall back to Setup when no account remains.
@@ -141,14 +109,14 @@ async function onAccountChanged(s: StatusStore | undefined) {
   // re-render can't look up stale result ids against the new store. Drop the
   // index too while it rebuilds, so a stale index can't be searched mid-switch.
   reset()
-  index.value = undefined
+  clearIndex()
   store.value = s
-  index.value = await loadOrBuildIndex(s)
+  await loadIndex(s)
 }
 
 function resetToSetup() {
   store.value = undefined
-  index.value = undefined
+  clearIndex()
   reset()
 }
 </script>
