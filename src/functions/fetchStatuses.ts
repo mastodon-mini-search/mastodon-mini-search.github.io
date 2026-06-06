@@ -48,6 +48,13 @@ function markType(store: StatusStore, uri: string, type: StatusType) {
   }
 }
 
+function client(store: StatusStore): mastodon.rest.Client {
+  return createRestAPIClient({
+    url: store.account.instanceUrl,
+    accessToken: store.account.apiKey
+  })
+}
+
 // Own posts/boosts page cleanly by status id, so we resume from the newest one
 // seen (`statusMinId`) and only pull what's new.
 async function fetchOwnStatuses(
@@ -114,18 +121,29 @@ async function fetchMarked(
   }
 }
 
-export default async function (store: StatusStore, afterBatch?: () => void) {
-  const masto = createRestAPIClient({
-    url: store.account.instanceUrl,
-    accessToken: store.account.apiKey
-  })
+// Each category is fetched on its own, so the UI can pull posts quickly without
+// waiting on a possibly enormous favourites list, and re-run any one of them
+// independently. Each entry point persists the store once it's done.
 
-  await fetchOwnStatuses(store, masto, afterBatch)
-  // Favourites and bookmarks are private endpoints — only reachable with an
-  // OAuth token. Without one we fetch just the public own-posts timeline.
-  if (store.account.apiKey) {
-    await fetchMarked(store, masto.v1.favourites.list({ limit: 40 }), 'favourite', afterBatch)
-    await fetchMarked(store, masto.v1.bookmarks.list({ limit: 40 }), 'bookmark', afterBatch)
+export async function fetchPosts(store: StatusStore, afterBatch?: () => void) {
+  await fetchOwnStatuses(store, client(store), afterBatch)
+  await sessions.saveStore(store)
+}
+
+// Favourites and bookmarks are private endpoints — only reachable with an OAuth
+// token. Without one there's nothing to fetch, so we bail before hitting them.
+export async function fetchFavourites(store: StatusStore, afterBatch?: () => void) {
+  if (!store.account.apiKey) {
+    return
   }
+  await fetchMarked(store, client(store).v1.favourites.list({ limit: 40 }), 'favourite', afterBatch)
+  await sessions.saveStore(store)
+}
+
+export async function fetchBookmarks(store: StatusStore, afterBatch?: () => void) {
+  if (!store.account.apiKey) {
+    return
+  }
+  await fetchMarked(store, client(store).v1.bookmarks.list({ limit: 40 }), 'bookmark', afterBatch)
   await sessions.saveStore(store)
 }
