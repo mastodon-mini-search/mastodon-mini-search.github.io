@@ -54,9 +54,11 @@ interface SessionRegistry {
 > 版本号 `INDEX_VERSION` 定义在 `createIndex.ts`——改动分词/索引内容时务必
 > 递增,以作废旧缓存。
 
-> 当前 UI 仍是单账号：`Setup` 走 `addSession`，`Main` 的「退出」走
-> `removeSession`（删当前账号、回到 Setup）。切换器 UI 尚未接入，但
-> 数据层已具备多账号能力（注册表、分键、非破坏切换），留作下一步。
+> 多账号 UI 已接入：`Setup` 走 `addSession`（首个账号）；顶栏的
+> `AccountSwitcher` 列出已知账号并支持切换（`setActive` + `loadStore`）、
+> 内联新增（`addSession`）、移除当前账号（`removeSession`）。切换器只做数据层
+> 变更，再把「新的激活 store（或无账号时的 `undefined`）」经 `changed` 事件
+> 交给 `Main`——由 `Main` 统一重建索引、清空上一次搜索，或回到 `Setup`。
 
 ## 迁移
 

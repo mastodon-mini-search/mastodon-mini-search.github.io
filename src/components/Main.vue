@@ -7,17 +7,14 @@
         <span class="logo" aria-hidden="true">🔍</span>
         <span class="title">站外搜索</span>
       </div>
-      <div class="account">
-        <span class="acct" :title="store.account.acct">@{{ store.account.acct }}</span>
-        <BlockingButton class="logout" :click="logOut">退出</BlockingButton>
-      </div>
+      <AccountSwitcher :account="store.account" @changed="onAccountChanged"/>
     </header>
 
-    <Loader :store="store" @loadComplete="onFetched"/>
+    <Loader :key="accountKey" :store="store" @loadComplete="onFetched"/>
 
     <template v-if="index">
       <section class="search">
-        <Searcher :index="index" @search="onSearch"/>
+        <Searcher :key="accountKey" :index="index" @search="onSearch"/>
         <div class="search-bar">
           <Filter :filter="filter"/>
           <span v-if="searched" class="count">{{ filtered.length }} 條結果</span>
@@ -37,7 +34,7 @@
 import Setup from "./Setup.vue"
 import { shallowRef, ShallowRef, reactive, ref, computed } from "vue"
 import { StatusStore } from "../models/StatusStore"
-import sessions from "../functions/sessions"
+import sessions, { storeKey } from "../functions/sessions"
 import Loader from './Loader.vue'
 import MiniSearch, { SearchResult } from 'minisearch'
 import Filter from './Filter.vue'
@@ -45,7 +42,7 @@ import Searcher from './Searcher.vue'
 import Results from './Results.vue'
 import createIndex, { toPersistedIndex, restoreIndex, indexNewStatuses } from '../functions/createIndex'
 import FilterState from '../models/FilterState'
-import BlockingButton from './BlockingButton.vue'
+import AccountSwitcher from './AccountSwitcher.vue'
 
 const store: ShallowRef<StatusStore | undefined> = shallowRef(await sessions.loadActiveStore())
 const index: ShallowRef<MiniSearch | undefined> = shallowRef(undefined)
@@ -58,6 +55,10 @@ const filter: FilterState = reactive({
 const results: ShallowRef<SearchResult[]> = shallowRef([])
 const query = ref('')
 const searched = ref(false)
+
+// Keys the per-account child UI (Loader count, Searcher query box) so their
+// internal state resets when the active account changes.
+const accountKey = computed(() => (store.value ? storeKey(store.value.account) : ''))
 
 // Filter the raw results by the active type toggles. Lifted here (rather than
 // inside Results) so the result count and empty states can react to it too.
@@ -118,11 +119,26 @@ function onSearch(q: string, rs: SearchResult[]) {
   searched.value = q.length > 0
 }
 
-async function logOut() {
-  const activeKey = await sessions.getActiveKey()
-  if (activeKey) {
-    await sessions.removeSession(activeKey)
+// The switcher already performed the data-layer change (switch / add / remove);
+// here we just swap in the new active store — rebuilding its index and clearing
+// the previous search — or fall back to Setup when no account remains.
+async function onAccountChanged(s: StatusStore | undefined) {
+  if (!s) {
+    resetToSetup()
+    return
   }
+  // Clear the previous account's results before swapping the store, so a
+  // re-render can't look up stale result ids against the new store. Drop the
+  // index too while it rebuilds, so a stale index can't be searched mid-switch.
+  results.value = []
+  query.value = ''
+  searched.value = false
+  index.value = undefined
+  store.value = s
+  index.value = await loadOrBuildIndex(s)
+}
+
+function resetToSetup() {
   store.value = undefined
   index.value = undefined
   results.value = []

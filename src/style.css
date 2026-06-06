@@ -8,6 +8,7 @@
   --accent-strong: #563acc;
   --accent-soft: rgba(99, 100, 255, 0.16);
   --on-accent: #ffffff;
+  --danger: #df405a;
 
   /* Status-type badge hues (post / boost / favourite / bookmark). */
   --boost: #41b782;
