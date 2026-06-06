@@ -3,6 +3,7 @@ import { ResolvedAccountSetting } from "../models/AccountSetting"
 import { SessionRegistry } from "../models/Session"
 import { StatusStore } from "../models/StatusStore"
 import { PersistedIndex } from "../models/PersistedIndex"
+import { OAuthApp, PendingAuth } from "../models/OAuthApp"
 import resolveAccount from "./resolveAccount"
 
 // One registry record under a fixed key; each account's toots under their own
@@ -11,6 +12,8 @@ const REGISTRY_KEY = 'sessions'
 // Pre-multi-account builds stored a single StatusStore here; migrated on first
 // read (see `loadRegistry`).
 const LEGACY_STORE_KEY = 'store'
+// The single OAuth login in flight (survives the redirect away and back).
+const PENDING_AUTH_KEY = 'oauth-pending'
 
 // The persistence seam. Production uses localforage (IndexedDB); tests inject an
 // in-memory map, so the session logic is unit-testable without a real database.
@@ -32,6 +35,13 @@ export function storeKey(account: { instanceUrl: string; accountId: string }): s
 // (it's a derived, throwaway artifact — see PersistedIndex).
 export function indexKey(account: { instanceUrl: string; accountId: string }): string {
   return `index:${account.instanceUrl}:${account.accountId}`
+}
+
+// Registered OAuth client credentials, keyed per instance so repeat logins on
+// the same instance reuse the same app rather than registering a new one each
+// time.
+export function oauthAppKey(instanceUrl: string): string {
+  return `oauth-app:${instanceUrl}`
 }
 
 function emptyStore(account: ResolvedAccountSetting): StatusStore {
@@ -111,24 +121,66 @@ export class SessionRepository {
     await this.saveRegistry(registry)
   }
 
-  // Add an account (or re-activate one already known). Existing cached toots are
-  // kept — switching is non-destructive; only removeSession deletes data.
+  // Add an account by handle (resolves it unauthenticated, no token). Kept for
+  // the resolve-only path and the session tests; the OAuth flow uses
+  // addResolvedSession with the account it already has in hand.
   async addSession(acct: string): Promise<StatusStore> {
-    const account = await this.resolve(acct)
+    return this.addResolvedSession(await this.resolve(acct))
+  }
+
+  // Register (or re-activate) an already-resolved account — the OAuth flow's
+  // entry point, since it ends up holding the full account (incl. a fresh
+  // `apiKey`) rather than a bare handle. Existing cached toots are kept;
+  // switching is non-destructive, only removeSession deletes data. A re-login
+  // refreshes the stored account (new token) in both the registry and the store
+  // without touching the toots.
+  async addResolvedSession(account: ResolvedAccountSetting): Promise<StatusStore> {
     const key = storeKey(account)
     const registry = await this.loadRegistry()
 
     let store = await this.loadStore(key)
-    if (!store) {
+    if (store) {
+      store.account = account
+      await this.saveStore(store)
+    } else {
       store = emptyStore(account)
       await this.saveStore(store)
     }
-    if (!registry.accounts.some(a => storeKey(a) === key)) {
+
+    const i = registry.accounts.findIndex(a => storeKey(a) === key)
+    if (i === -1) {
       registry.accounts.push(account)
+    } else {
+      registry.accounts[i] = account
     }
     registry.activeKey = key
     await this.saveRegistry(registry)
     return store
+  }
+
+  // --- OAuth credential storage -------------------------------------------
+  // The registered client per instance, the in-flight login, and helpers to
+  // read/clear them. Routed through the same KeyValueStore as everything else
+  // so the single-storage-entrypoint contract (see docs/sessions.md) holds.
+
+  async loadOAuthApp(instanceUrl: string): Promise<OAuthApp | undefined> {
+    return (await this.kv.getItem<OAuthApp>(oauthAppKey(instanceUrl))) ?? undefined
+  }
+
+  async saveOAuthApp(app: OAuthApp): Promise<void> {
+    await this.kv.setItem(oauthAppKey(app.instanceUrl), app)
+  }
+
+  async loadPendingAuth(): Promise<PendingAuth | undefined> {
+    return (await this.kv.getItem<PendingAuth>(PENDING_AUTH_KEY)) ?? undefined
+  }
+
+  async savePendingAuth(pending: PendingAuth): Promise<void> {
+    await this.kv.setItem(PENDING_AUTH_KEY, pending)
+  }
+
+  async clearPendingAuth(): Promise<void> {
+    await this.kv.removeItem(PENDING_AUTH_KEY)
   }
 
   // Remove an account and its cached toots. If it was active, fall back to any

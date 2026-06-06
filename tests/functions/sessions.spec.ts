@@ -139,6 +139,55 @@ describe('SessionRepository', () => {
     expect(await repo.loadIndex(account)).toBeUndefined()
   })
 
+  it('addResolvedSession registers and activates an account with its token', async () => {
+    const authed: ResolvedAccountSetting = {
+      ...accounts['alice@a.social'],
+      apiKey: 'tok-1'
+    }
+    const store = await repo.addResolvedSession(authed)
+    expect(store.account.apiKey).toBe('tok-1')
+    expect(await repo.getActiveKey()).toBe(storeKey(authed))
+    expect((await repo.listSessions())[0].apiKey).toBe('tok-1')
+  })
+
+  it('re-login refreshes the token in place without wiping toots', async () => {
+    const first = await repo.addResolvedSession({ ...accounts['alice@a.social'], apiKey: 'tok-1' })
+    first.statuses['uri-a'] = { content: 'x', createdAt: '', types: ['post'], acct: 'alice@a.social', id: '10' }
+    await repo.saveStore(first)
+
+    const again = await repo.addResolvedSession({ ...accounts['alice@a.social'], apiKey: 'tok-2' })
+    expect(Object.keys(again.statuses)).toEqual(['uri-a']) // toots kept
+    expect(again.account.apiKey).toBe('tok-2') // token refreshed
+    expect((await repo.listSessions()).length).toBe(1) // not duplicated
+    expect((await repo.listSessions())[0].apiKey).toBe('tok-2') // registry refreshed too
+  })
+
+  it('round-trips an OAuth app registration, keyed per instance', async () => {
+    const app = {
+      instanceUrl: 'https://a.social',
+      clientId: 'cid',
+      clientSecret: 'secret',
+      redirectUri: 'https://example.test/',
+      scope: 'read'
+    }
+    await repo.saveOAuthApp(app)
+    expect(await repo.loadOAuthApp('https://a.social')).toEqual(app)
+    expect(await repo.loadOAuthApp('https://b.social')).toBeUndefined()
+  })
+
+  it('round-trips and clears the pending auth', async () => {
+    const pending = {
+      instanceUrl: 'https://a.social',
+      state: 'nonce',
+      redirectUri: 'https://example.test/',
+      scope: 'read'
+    }
+    await repo.savePendingAuth(pending)
+    expect(await repo.loadPendingAuth()).toEqual(pending)
+    await repo.clearPendingAuth()
+    expect(await repo.loadPendingAuth()).toBeUndefined()
+  })
+
   it('migrates a legacy single-store blob on first read', async () => {
     // Seed the pre-multi-account layout: one StatusStore under 'store'.
     const legacy: StatusStore = {

@@ -43,8 +43,14 @@ import Results from './Results.vue'
 import createIndex, { toPersistedIndex, restoreIndex, indexNewStatuses } from '../functions/createIndex'
 import FilterState from '../models/FilterState'
 import AccountSwitcher from './AccountSwitcher.vue'
+import { completeLoginFromRedirect } from '../functions/oauth'
 
-const store: ShallowRef<StatusStore | undefined> = shallowRef(await sessions.loadActiveStore())
+// If this load is an OAuth callback, finish the login and make the freshly
+// authorized account active; otherwise just resume the last active account.
+const authed = await completeLoginFromRedirect()
+const store: ShallowRef<StatusStore | undefined> = shallowRef(
+  authed ? await sessions.addResolvedSession(authed) : await sessions.loadActiveStore()
+)
 const index: ShallowRef<MiniSearch | undefined> = shallowRef(undefined)
 const filter: FilterState = reactive({
   post: true,

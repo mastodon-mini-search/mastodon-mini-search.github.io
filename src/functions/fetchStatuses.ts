@@ -48,12 +48,13 @@ function markType(store: StatusStore, uri: string, type: StatusType) {
   }
 }
 
-export default async function (store: StatusStore, afterBatch?: () => void) {
-  const masto = createRestAPIClient({
-    url: store.account.instanceUrl,
-    accessToken: store.account.apiKey
-  })
-
+// Own posts/boosts page cleanly by status id, so we resume from the newest one
+// seen (`statusMinId`) and only pull what's new.
+async function fetchOwnStatuses(
+  store: StatusStore,
+  masto: mastodon.rest.Client,
+  afterBatch?: () => void
+) {
   while (true) {
     const batch = await masto.v1.accounts.$select(store.account.accountId).statuses.list({
       limit: 40,
@@ -76,6 +77,55 @@ export default async function (store: StatusStore, afterBatch?: () => void) {
         afterBatch()
       }
     }
+  }
+}
+
+// Favourites and bookmarks page by an internal record id (exposed only via the
+// Link header, never on the returned statuses), so we can't resume them by
+// status id the way own posts do. Instead we walk newest-first from the top and
+// stop at the first page that's entirely statuses we've already stored under
+// this type — i.e. where we caught up to last time. The first run (empty store)
+// has nothing known, so it pulls the whole list.
+async function fetchMarked(
+  store: StatusStore,
+  pages: AsyncIterable<mastodon.v1.Status[]>,
+  type: StatusType,
+  afterBatch?: () => void
+) {
+  for await (const page of pages) {
+    if (page.length == 0) {
+      break
+    }
+    let allKnown = true
+    page.forEach(status => {
+      const known = !!store.statuses[status.uri] && store.statuses[status.uri].types.includes(type)
+      saveStatus(store, status)
+      markType(store, status.uri, type)
+      if (!known) {
+        allKnown = false
+      }
+    })
+    if (afterBatch) {
+      afterBatch()
+    }
+    if (allKnown) {
+      break
+    }
+  }
+}
+
+export default async function (store: StatusStore, afterBatch?: () => void) {
+  const masto = createRestAPIClient({
+    url: store.account.instanceUrl,
+    accessToken: store.account.apiKey
+  })
+
+  await fetchOwnStatuses(store, masto, afterBatch)
+  // Favourites and bookmarks are private endpoints — only reachable with an
+  // OAuth token. Without one we fetch just the public own-posts timeline.
+  if (store.account.apiKey) {
+    await fetchMarked(store, masto.v1.favourites.list({ limit: 40 }), 'favourite', afterBatch)
+    await fetchMarked(store, masto.v1.bookmarks.list({ limit: 40 }), 'bookmark', afterBatch)
   }
   await sessions.saveStore(store)
 }

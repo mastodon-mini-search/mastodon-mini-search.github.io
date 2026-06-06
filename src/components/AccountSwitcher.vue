@@ -30,7 +30,7 @@
 
       <hr />
 
-      <form v-if="adding" class="add" @submit.prevent="add">
+      <form v-if="adding" class="add" @submit.prevent="loginAdd">
         <input
           ref="addInput"
           v-model="newAcct"
@@ -40,7 +40,14 @@
           spellcheck="false"
           :disabled="busy"
         />
-        <button class="accent" type="submit" :disabled="busy">新增</button>
+        <div class="add-actions">
+          <button class="accent" type="submit" :disabled="busy">
+            <span v-if="addBusy === 'login'" class="spinner" aria-hidden="true"></span>登入
+          </button>
+          <button type="button" :disabled="busy" @click="browseAdd">
+            <span v-if="addBusy === 'browse'" class="spinner" aria-hidden="true"></span>免登入
+          </button>
+        </div>
       </form>
       <button v-else type="button" class="row" role="menuitem" :disabled="busy" @click="startAdd">
         <span class="ic" aria-hidden="true">＋</span><span>新增帳號</span>
@@ -59,6 +66,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import sessions, { storeKey } from '../functions/sessions'
 import { ResolvedAccountSetting } from '../models/AccountSetting'
 import { StatusStore } from '../models/StatusStore'
+import { beginLogin } from '../functions/oauth'
 
 const props = defineProps<{
   account: ResolvedAccountSetting
@@ -74,6 +82,8 @@ const known = ref<ResolvedAccountSetting[]>([])
 const adding = ref(false)
 const newAcct = ref('')
 const busy = ref(false)
+// Which add-action is in flight, to show the right inline spinner ('' = none).
+const addBusy = ref<'' | 'login' | 'browse'>('')
 const error = ref('')
 const root = ref<HTMLElement | null>(null)
 const addInput = ref<HTMLInputElement | null>(null)
@@ -95,6 +105,7 @@ function close() {
   adding.value = false
   newAcct.value = ''
   error.value = ''
+  addBusy.value = ''
 }
 
 async function startAdd() {
@@ -121,21 +132,45 @@ async function switchTo(a: ResolvedAccountSetting) {
   }
 }
 
-async function add() {
-  const acct = newAcct.value.trim()
-  if (!/^[^@\s]+@[^@\s]+$/.test(acct)) {
+// OAuth path: redirect to the instance's consent screen. The page navigates
+// away; Main finishes the login and activates the account when it returns, so
+// there's no 'changed' emit here. Accepts a bare instance or a full handle.
+async function loginAdd() {
+  const input = newAcct.value.trim()
+  if (!input) {
+    return
+  }
+  busy.value = true
+  addBusy.value = 'login'
+  error.value = ''
+  try {
+    await beginLogin(input)
+  } catch {
+    error.value = '無法連到這個站點，請確認站點網址是否正確'
+    busy.value = false
+    addBusy.value = ''
+  }
+}
+
+// No-login path: resolve the handle and add it for public-toot browsing only
+// (no favourites/bookmarks). Needs a full `user@instance` handle.
+async function browseAdd() {
+  const input = newAcct.value.trim()
+  if (!/^[^@\s]+@[^@\s]+$/.test(input)) {
     error.value = '請輸入「用戶名@站點」格式'
     return
   }
   busy.value = true
+  addBusy.value = 'browse'
   error.value = ''
   try {
-    emit('changed', await sessions.addSession(acct))
+    emit('changed', await sessions.addSession(input))
     close()
   } catch {
     error.value = '找不到這個帳號，請確認 ID 是否正確'
   } finally {
     busy.value = false
+    addBusy.value = ''
   }
 }
 
@@ -277,11 +312,11 @@ hr {
 }
 .add {
   display: flex;
+  flex-direction: column;
   gap: 0.4rem;
   padding: 0.25rem 0.3rem;
 }
 .add input {
-  flex: 1;
   min-width: 0;
   padding: 0.45rem 0.6rem;
   border: 1px solid var(--border);
@@ -293,10 +328,32 @@ hr {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
-.add .accent {
-  flex: none;
+.add-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.add-actions button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
   padding: 0.45rem 0.7rem;
   font-size: 0.85rem;
+}
+.spinner {
+  width: 0.85em;
+  height: 0.85em;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0.8;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .error {
   margin: 0.15rem 0.55rem 0.35rem;

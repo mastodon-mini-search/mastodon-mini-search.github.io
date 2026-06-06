@@ -19,8 +19,10 @@
 | 键 | 内容 | 说明 |
 |----|------|------|
 | `sessions` | `SessionRegistry` | 账号注册表 + 当前激活键 |
-| `store:${instanceUrl}:${accountId}` | `StatusStore` | 单账号的嘟文/位置/账号信息 |
+| `store:${instanceUrl}:${accountId}` | `StatusStore` | 单账号的嘟文/位置/账号信息（含 OAuth `apiKey`） |
 | `index:${instanceUrl}:${accountId}` | `PersistedIndex` | 单账号搜索索引的序列化缓存（派生物，可随时丢弃重建） |
+| `oauth-app:${instanceUrl}` | `OAuthApp` | 按实例缓存的 OAuth2 客户端凭证（client_id/secret + redirect_uri/scope），同站复用，免去每次重新注册 |
+| `oauth-pending` | `PendingAuth` | 跳转授权前暂存的「进行中登录」（随机 `state` + 实例/redirect/scope）；回跳时校验并消费 |
 
 ```ts
 interface SessionRegistry {
@@ -36,8 +38,12 @@ interface SessionRegistry {
 
 ## 操作语义（由测试约束）
 
-- `addSession(acct)`：解析账号 → 若该账号**已有**缓存则原样保留（不清空），
-  否则建空 store → 入注册表（不重复）→ 设为激活 → 返回 store。
+- `addSession(acct)`：免登录路径——解析 handle（不带 token）后转交
+  `addResolvedSession`。仅供「不登录、只搜公开嘟文」与会话测试使用。
+- `addResolvedSession(account)`：OAuth 流程的入口——传入**已解析**的账号
+  （含新鲜的 `apiKey`）→ 若该账号**已有**缓存则原样保留嘟文、只刷新其
+  `account`（即换上新 token），否则建空 store → 入注册表（已存在则替换该项，
+  不重复）→ 设为激活 → 返回 store。重新登录因此会就地更新 token，不动嘟文。
 - `setActive(key)`：只改激活指针。**不动任何数据**——这是「切换」的底座。
 - `loadActiveStore()`：读激活账号的 store；无激活账号返回 `undefined`。
 - `saveStore(store)`：按 `store.account` 算键写回。
@@ -59,6 +65,33 @@ interface SessionRegistry {
 > 内联新增（`addSession`）、移除当前账号（`removeSession`）。切换器只做数据层
 > 变更，再把「新的激活 store（或无账号时的 `undefined`）」经 `changed` 事件
 > 交给 `Main`——由 `Main` 统一重建索引、清空上一次搜索，或回到 `Setup`。
+
+## OAuth 登录
+
+私有端点（喜欢 `/api/v1/favourites`、书签 `/api/v1/bookmarks`）必须带 token，
+所以要抓喜欢与书签得先走 OAuth。逻辑在 `src/functions/oauth.ts`，纯前端、无后端，
+靠 Mastodon 的动态应用注册完成（GitHub Pages 静态托管即可）。
+
+1. **`beginLogin(input)`**：把 `user@instance` / `@user@instance` / `instance.tld`
+   / `https://instance` 归一成实例 origin → 注册应用（`POST /api/v1/apps`，
+   `scope=read`）或复用 `oauth-app:` 缓存 → 暂存 `oauth-pending`（随机 `state`）→
+   跳转到实例的 `/oauth/authorize`。`redirect_uri` 取
+   `location.origin + location.pathname`，注册/授权/换 token 三处必须**逐字一致**。
+2. **`completeLoginFromRedirect()`**：每次加载都跑。URL 带 `?code=&state=` 时校验
+   `state`（拒掉被拒绝/伪造/过期的回跳）→ 用 `code` 换 token（`POST /oauth/token`）
+   → `verifyCredentials` 确认 token 并拿到自己的 id/acct → 返回带 `apiKey` 的
+   `ResolvedAccountSetting`；否则返回 `null`。无论成败都清掉 `oauth-pending` 并洗掉
+   URL 上的查询串，避免刷新重放。
+
+`Main` 启动时先调它：是回跳就 `addResolvedSession` 把新授权账号设为激活，否则照常
+`loadActiveStore`。`Setup` 与 `AccountSwitcher` 都同时提供「用 Mastodon 登入」
+（`beginLogin`，会跳转离开本页）与「免登入」（`addSession`，只搜公开嘟文）两条路。
+
+> token 存在 `store.account.apiKey`（随 `StatusStore` / 注册表持久化在本机）。
+> `fetchStatuses` 用它建带 token 的客户端：自己的嘟文按 `statusMinId` 增量抓；
+> 喜欢/书签的分页游标是实例内部 id（只在 Link 头里、不在返回的 status 上），
+> 没法按 status id 续抓，所以从最新往下翻，遇到「整页都是本类型已存过的」即停
+> （首次空 store 会全量拉一遍）。没有 token 时只抓公开嘟文，跳过喜欢/书签。
 
 ## 迁移
 

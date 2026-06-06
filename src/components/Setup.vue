@@ -6,8 +6,8 @@
       <p>搜索你自己的嘟文、轉嘟、喜歡與書籤——全部在本機建立索引，不經過第三方。</p>
     </div>
 
-    <form class="card" @submit.prevent="save">
-      <label for="acct">你的長毛象 ID</label>
+    <form class="card" @submit.prevent="login">
+      <label for="acct">你的長毛象 ID 或站點</label>
       <input
         id="acct"
         type="text"
@@ -16,8 +16,18 @@
         autocapitalize="off"
         autocomplete="off"
         spellcheck="false"
+        :disabled="!!busy"
       />
-      <BlockingButton class="accent submit" :click="save">開始使用</BlockingButton>
+      <button class="accent submit" type="submit" :disabled="!!busy">
+        <span v-if="busy === 'login'" class="spinner" aria-hidden="true"></span>
+        {{ busy === 'login' ? '正在前往授權…' : '用 Mastodon 登入' }}
+      </button>
+      <button type="button" :disabled="!!busy" @click="browse">
+        <span v-if="busy === 'browse'" class="spinner" aria-hidden="true"></span>
+        {{ busy === 'browse' ? '載入中…' : '不登入，只搜索公開嘟文' }}
+      </button>
+      <p v-if="error" class="error">{{ error }}</p>
+      <p class="note">登入會跳轉到你的站點授權，之後才能搜索喜歡與書籤；不登入只能搜索你的公開嘟文。</p>
     </form>
   </div>
 </template>
@@ -26,19 +36,52 @@
 import { ref } from 'vue'
 import sessions from '../functions/sessions'
 import { StatusStore } from '../models/StatusStore'
-import BlockingButton from './BlockingButton.vue'
+import { beginLogin } from '../functions/oauth'
 
 const emit = defineEmits<{
   (e: 'setupComplete', store: StatusStore): void
 }>()
 
 const acct = ref('')
-async function save() {
-  if (!acct.value.trim()) {
+// Which action is in flight (disables the form), or '' when idle.
+const busy = ref<'' | 'login' | 'browse'>('')
+const error = ref('')
+
+// OAuth path: register on the instance and redirect to its consent screen. Main
+// finishes the login when the browser returns, so there's nothing to emit. The
+// button stays in its "redirecting" state until navigation; only a failure
+// before the redirect (bad instance, network) lands back here with an error.
+async function login() {
+  const input = acct.value.trim()
+  if (!input) {
     return
   }
-  const store = await sessions.addSession(acct.value.trim())
-  emit('setupComplete', store)
+  busy.value = 'login'
+  error.value = ''
+  try {
+    await beginLogin(input)
+  } catch {
+    error.value = '無法連到這個站點，請確認站點網址是否正確'
+    busy.value = ''
+  }
+}
+
+// No-login path: resolve the handle and browse public toots only (no favourites
+// or bookmarks). Needs a full `user@instance` handle, not a bare instance.
+async function browse() {
+  const input = acct.value.trim()
+  if (!/^[^@\s]+@[^@\s]+$/.test(input)) {
+    error.value = '請輸入「用戶名@站點」格式（例如 merely@fsk.im）'
+    return
+  }
+  busy.value = 'browse'
+  error.value = ''
+  try {
+    emit('setupComplete', await sessions.addSession(input))
+  } catch {
+    error.value = '找不到這個帳號，請確認 ID 是否正確'
+    busy.value = ''
+  }
 }
 </script>
 
@@ -92,7 +135,38 @@ async function save() {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+.card button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+}
 .card .submit {
   margin-top: 0.3rem;
+}
+.note {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--danger);
+}
+.spinner {
+  width: 0.9em;
+  height: 0.9em;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0.8;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>
