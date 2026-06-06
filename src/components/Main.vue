@@ -1,17 +1,41 @@
 <template>
   <Setup v-if="!store" @setupComplete="saveStoreCreated"/>
-  <div v-if="store">
-    當前賬號：{{ store.account.acct }} <BlockingButton :click="logOut">退出</BlockingButton>
-  </div>
-  <Loader v-if="store" :store="store" @loadComplete="onFetched"/>
-  <Searcher v-if="index" :index="index" @searchComplete="saveResults"/>
-  <Filter v-if="index" :filter="filter"/>
-  <Results v-if="store && results.length > 0" :results="results" :store="store" :filter="filter"/>
+
+  <template v-else>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">🔍</span>
+        <span class="title">站外搜索</span>
+      </div>
+      <div class="account">
+        <span class="acct" :title="store.account.acct">@{{ store.account.acct }}</span>
+        <BlockingButton class="logout" :click="logOut">退出</BlockingButton>
+      </div>
+    </header>
+
+    <Loader :store="store" @loadComplete="onFetched"/>
+
+    <template v-if="index">
+      <section class="search">
+        <Searcher :index="index" @search="onSearch"/>
+        <div class="search-bar">
+          <Filter :filter="filter"/>
+          <span v-if="searched" class="count">{{ filtered.length }} 條結果</span>
+        </div>
+      </section>
+
+      <p v-if="!searched" class="hint">輸入關鍵字，開始搜索你的嘟文。</p>
+      <p v-else-if="results.length === 0" class="hint">沒有符合「{{ query }}」的嘟文。</p>
+      <p v-else-if="filtered.length === 0" class="hint">{{ results.length }} 條結果都被類型篩選擋掉了，試著多勾選幾個類型。</p>
+      <Results v-else :results="filtered" :store="store"/>
+    </template>
+    <p v-else class="hint">先載入嘟文，建立搜索索引。</p>
+  </template>
 </template>
 
 <script setup lang="ts">
 import Setup from "./Setup.vue"
-import { shallowRef, ShallowRef, reactive } from "vue"
+import { shallowRef, ShallowRef, reactive, ref, computed } from "vue"
 import { StatusStore } from "../models/StatusStore"
 import sessions from "../functions/sessions"
 import Loader from './Loader.vue'
@@ -32,6 +56,18 @@ const filter: FilterState = reactive({
   bookmark: false
 })
 const results: ShallowRef<SearchResult[]> = shallowRef([])
+const query = ref('')
+const searched = ref(false)
+
+// Filter the raw results by the active type toggles. Lifted here (rather than
+// inside Results) so the result count and empty states can react to it too.
+const filtered = computed(() => {
+  const s = store.value
+  if (!s) {
+    return []
+  }
+  return results.value.filter(r => s.statuses[r.id].types.some(t => filter[t]))
+})
 
 if (store.value) {
   index.value = await loadOrBuildIndex(store.value)
@@ -74,8 +110,12 @@ function onFetched() {
   sessions.saveIndex(s.account, toPersistedIndex(s, idx))
 }
 
-function saveResults(rs: SearchResult[]) {
+// A non-empty query counts as "searched"; clearing the box returns to the idle
+// hint rather than showing a misleading "0 條結果".
+function onSearch(q: string, rs: SearchResult[]) {
+  query.value = q
   results.value = rs
+  searched.value = q.length > 0
 }
 
 async function logOut() {
@@ -86,9 +126,82 @@ async function logOut() {
   store.value = undefined
   index.value = undefined
   results.value = []
+  query.value = ''
+  searched.value = false
 }
 </script>
 
 <style scoped>
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.logo {
+  font-size: 1.1rem;
+}
+.title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+.account {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+.acct {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12rem;
+}
+.account :deep(.logout) {
+  padding: 0.35rem 0.7rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
 
+/* Keep the search box reachable while scrolling a long result list. */
+.search {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.75rem 0;
+  margin-bottom: 0.25rem;
+  background: var(--bg);
+}
+.search-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+}
+.count {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.hint {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 2.5rem 1rem;
+  margin: 0;
+}
 </style>

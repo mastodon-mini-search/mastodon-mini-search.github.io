@@ -1,7 +1,7 @@
 <template>
-  <ul>
-    <li v-for="result in filteredResult" :key="result.id">
-      <ResultItem :result="result" :store="store"/>
+  <ul class="results">
+    <li v-for="result in results" :key="result.id">
+      <ResultItem :result="result" :store="store" />
     </li>
   </ul>
 </template>
@@ -10,26 +10,20 @@
 import { StatusStore } from '../models/StatusStore'
 import { SearchResult } from 'minisearch'
 import ResultItem from './ResultItem.vue'
-import FilterState from '../models/FilterState'
-import { computed } from 'vue'
 
-const props = defineProps<{
-  store: StatusStore,
-  results: SearchResult[],
-  filter: FilterState
+defineProps<{
+  store: StatusStore
+  results: SearchResult[]
 }>()
-
-const filteredResult = computed(() => {
-  return props.results.filter(r => {
-    const status = props.store.statuses[r.id]
-    return status.types.some(x => props.filter[x])
-  })
-})
 </script>
 
 <style scoped>
-ul {
+.results {
+  margin: 0;
   padding: 0;
   list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
 }
 </style>
