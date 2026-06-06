@@ -9,7 +9,7 @@
     <header class="topbar">
       <div class="brand">
         <span class="logo" aria-hidden="true">🔍</span>
-        <span class="title">站外搜索</span>
+        <span class="title">長毛象本地搜索</span>
       </div>
       <AccountSwitcher :account="store.account" @add="startAddAccount"/>
     </header>

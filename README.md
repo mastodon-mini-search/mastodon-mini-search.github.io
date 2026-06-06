@@ -1,6 +1,6 @@
-# Mastodon Mini Search · 站外搜索
+# 長毛象本地搜索 · tootsearch
 
-為 Mastodon 打造的**純前端**站外搜索工具：把你自己的嘟文、轉嘟、喜歡與書籤抓到本機，建立全文索引後在瀏覽器裡離線搜索。專為中文檢索設計——**免詞典分詞**、**繁簡互通**、**中英混排**。
+為 Mastodon 打造的**純前端**本地搜索工具：把你自己的嘟文、轉嘟、喜歡與書籤抓到本機，建立全文索引後在瀏覽器裡離線搜索。專為中文檢索設計——**免詞典分詞**、**繁簡互通**、**中英混排**。
 
 沒有後端、沒有伺服器。所有資料（嘟文、搜索索引、登入憑證）都只存在你瀏覽器的 IndexedDB 裡，可直接託管於 GitHub Pages 等靜態空間。
 
@@ -56,7 +56,7 @@ npm run test:watch # 監看模式
 
 ## 部署
 
-推送到 `master` 會自動透過 GitHub Actions 打包並發布 `dist/` 到 GitHub Pages（見 `.github/workflows/`）。因為是純靜態站，部署到任何靜態空間皆可——OAuth 靠 Mastodon 的動態應用註冊完成，無需後端。
+推送到 `main` 會自動透過 GitHub Actions 打包並發布 `dist/` 到 GitHub Pages（見 `.github/workflows/`）。因為是純靜態站，部署到任何靜態空間皆可——OAuth 靠 Mastodon 的動態應用註冊完成，無需後端。
 
 ## 技術棧
 

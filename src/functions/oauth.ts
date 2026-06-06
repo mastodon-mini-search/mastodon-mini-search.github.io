@@ -4,7 +4,7 @@ import sessions from "./sessions"
 
 // Shown to the user on the instance's authorization screen and listed under
 // their account's "Authorized apps".
-const APP_NAME = "mastodon-mini-search.github.io"
+const APP_NAME = "tootsearch.github.io"
 // `read` covers everything this app needs — own statuses, favourites and
 // bookmarks — and nothing it doesn't (no write/follow/push).
 const SCOPE = "read"

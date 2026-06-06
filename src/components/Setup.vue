@@ -10,7 +10,7 @@
 
     <div class="hero">
       <span class="logo" aria-hidden="true">🔍</span>
-      <h1>{{ cancelable ? '新增帳號' : '長毛象站外搜索' }}</h1>
+      <h1>{{ cancelable ? '新增帳號' : '長毛象本地搜索' }}</h1>
       <p v-if="cancelable">登入或輸入另一個長毛象帳號，加入後可在右上角隨時切換。</p>
       <p v-else>搜索你自己的嘟文、轉嘟、喜歡與書籤——全部在本機建立索引，不經過第三方。</p>
     </div>

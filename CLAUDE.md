@@ -18,7 +18,7 @@ npx vitest run tests/functions/tokenize.spec.ts      # one test file
 npx vitest run -t "繁简等价"                          # tests matching a name
 ```
 
-Tests run under `happy-dom` (configured in `vite.config.ts`) because `stripHTML` and `createIndex` use real DOM APIs (`document.createElement`). Deployment is automatic: pushing to `master` triggers `.github/workflows/` to build and publish `dist/` to GitHub Pages.
+Tests run under `happy-dom` (configured in `vite.config.ts`) because `stripHTML` and `createIndex` use real DOM APIs (`document.createElement`). Deployment is automatic: pushing to `main` triggers `.github/workflows/` to build and publish `dist/` to GitHub Pages.
 
 ## Architecture
 
