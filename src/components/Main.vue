@@ -1,5 +1,10 @@
 <template>
-  <Setup v-if="!store" @setupComplete="saveStoreCreated"/>
+  <Setup
+    v-if="!store || addingAccount"
+    :cancelable="!!store"
+    @setupComplete="onSetupComplete"
+    @cancel="addingAccount = false"
+  />
 
   <template v-else>
     <header class="topbar">
@@ -7,7 +12,7 @@
         <span class="logo" aria-hidden="true">🔍</span>
         <span class="title">站外搜索</span>
       </div>
-      <AccountSwitcher :account="store.account" @changed="onAccountChanged"/>
+      <AccountSwitcher :account="store.account" @changed="onAccountChanged" @add="startAddAccount"/>
     </header>
 
     <Loader :key="accountKey" :store="store" @loadComplete="onFetched"/>
@@ -61,6 +66,10 @@ const filter: FilterState = reactive({
 const results: ShallowRef<SearchResult[]> = shallowRef([])
 const query = ref('')
 const searched = ref(false)
+// When true, the Setup screen is shown on top of an existing session to add
+// another account (the switcher's "新增帳號" routes here instead of an inline
+// form). Reset once the new account lands or the user backs out.
+const addingAccount = ref(false)
 
 // Keys the per-account child UI (Loader count, Searcher query box) so their
 // internal state resets when the active account changes.
@@ -93,9 +102,28 @@ async function loadOrBuildIndex(s: StatusStore): Promise<MiniSearch> {
   return built
 }
 
-function saveStoreCreated(storeCreated: StatusStore) {
-  // addSession already persisted it; just show it.
-  store.value = storeCreated
+// The switcher asked to add an account: show the Setup screen over the current
+// session. Clear the active search first so backing out doesn't reveal a stale
+// query box against still-listed results.
+function startAddAccount() {
+  results.value = []
+  query.value = ''
+  searched.value = false
+  addingAccount.value = true
+}
+
+// Setup finished (no-login browse path; the OAuth path returns via the redirect
+// instead). addSession already persisted and activated the account. For the
+// first-run setup there's no prior account, so just show it. When adding on top
+// of an existing session, leave the add screen and swap to the new account the
+// same way the switcher does.
+function onSetupComplete(storeCreated: StatusStore) {
+  if (addingAccount.value) {
+    addingAccount.value = false
+    onAccountChanged(storeCreated)
+  } else {
+    store.value = storeCreated
+  }
 }
 
 // A fetch finished: the store was mutated in place and already persisted by

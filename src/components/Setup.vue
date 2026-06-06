@@ -1,9 +1,18 @@
 <template>
   <div class="setup">
+    <button
+      v-if="cancelable"
+      type="button"
+      class="back"
+      :disabled="!!busy"
+      @click="emit('cancel')"
+    >← 返回</button>
+
     <div class="hero">
       <span class="logo" aria-hidden="true">🔍</span>
-      <h1>長毛象站外搜索</h1>
-      <p>搜索你自己的嘟文、轉嘟、喜歡與書籤——全部在本機建立索引，不經過第三方。</p>
+      <h1>{{ cancelable ? '新增帳號' : '長毛象站外搜索' }}</h1>
+      <p v-if="cancelable">登入或輸入另一個長毛象帳號，加入後可在右上角隨時切換。</p>
+      <p v-else>搜索你自己的嘟文、轉嘟、喜歡與書籤——全部在本機建立索引，不經過第三方。</p>
     </div>
 
     <form class="card" @submit.prevent="login">
@@ -38,8 +47,15 @@ import sessions from '../functions/sessions'
 import { StatusStore } from '../models/StatusStore'
 import { beginLogin } from '../functions/oauth'
 
+// `cancelable` is set when there's already an active account (the switcher's
+// "add account" flow reuses this screen); the very first setup has no account to
+// go back to, so it hides the back button and shows the welcome copy instead.
+defineProps<{
+  cancelable?: boolean
+}>()
 const emit = defineEmits<{
   (e: 'setupComplete', store: StatusStore): void
+  (e: 'cancel'): void
 }>()
 
 const acct = ref('')
@@ -92,6 +108,18 @@ async function browse() {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+}
+.back {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0.3rem 0.4rem;
+  font-size: 0.9rem;
+}
+.back:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text);
 }
 .hero {
   text-align: center;
