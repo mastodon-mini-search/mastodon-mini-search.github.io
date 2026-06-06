@@ -16,7 +16,7 @@
 
     <Loader :key="accountKey" :store="store" @loadComplete="growIndex"/>
 
-    <template v-if="index">
+    <template v-if="ready">
       <section class="search">
         <Searcher v-model="text" @submit="runNow"/>
         <div class="search-bar">
@@ -58,8 +58,8 @@ import { useSearch } from '../composables/useSearch'
 // and reacts to the active account changing. `useSearch` registers an
 // onBeforeUnmount, so it must run before the awaits below, during synchronous setup.
 const { activeStore: store, bootstrap } = useSessions()
-const { index, building, load: loadIndex, grow: growIndex, clear: clearIndex } = useSearchIndex(store)
-const { text, query, results, filtered, searched, filter, runNow, reset } = useSearch(index, store)
+const { ready, building, search, load: loadIndex, grow: growIndex, clear: clearIndex } = useSearchIndex(store)
+const { text, query, results, filtered, searched, filter, runNow, reset } = useSearch(search, ready, store)
 
 // When true, the Setup screen is shown on top of an existing session to add
 // another account (the switcher's "新增帳號" routes here instead of an inline
@@ -74,8 +74,8 @@ const accountKey = computed(() => (store.value ? storeKey(store.value.account) :
 // account from Setup). Clear the previous search and index first — before any
 // re-render — so stale result ids can't be looked up against the new store and a
 // stale index can't be searched mid-switch. Then rebuild the index, but only
-// once the store actually holds toots: an empty store leaves the index undefined
-// so the UI shows the "load first" hint, and the first fetch builds it (growIndex).
+// once the store actually holds toots: an empty store leaves `ready` false so the
+// UI shows the "load first" hint, and the first fetch builds it (growIndex).
 async function applyActiveStore(s: StatusStore | undefined) {
   reset()
   clearIndex()

@@ -53,18 +53,23 @@ export interface IndexDoc {
   content: string
 }
 
-// Pull the searchable docs out of a store. Touches the DOM (stripHTML), so this
-// runs on the main thread — the worker is handed the stripped docs, not the raw
-// statuses, because a worker has no `document`.
-export function extractDocs(store: StatusStore): IndexDoc[] {
-  return Object.entries(store.statuses).map(([uri, status]) => ({
-    uri: uri,
-    content: searchableContent(status)
-  }))
+// Pull the searchable docs out of a store, optionally skipping uris that are
+// already indexed (so a `grow` strips and ships only the new toots). Touches the
+// DOM (stripHTML), so this runs on the main thread — the worker is handed the
+// stripped docs, not the raw statuses, because a worker has no `document`.
+export function extractDocs(store: StatusStore, skip?: Set<string>): IndexDoc[] {
+  const docs: IndexDoc[] = []
+  for (const [uri, status] of Object.entries(store.statuses)) {
+    if (skip?.has(uri)) {
+      continue
+    }
+    docs.push({ uri: uri, content: searchableContent(status) })
+  }
+  return docs
 }
 
 // Build an index from already-extracted docs. DOM-free (the tokenizer only does
-// string work), so this is the half that can run in a worker — see index.worker.ts.
+// string work), so this is the half that runs in a worker — see indexHolder.ts.
 export function buildIndexFromDocs(docs: IndexDoc[]): MiniSearch {
   const miniSearch = new MiniSearch(options)
   miniSearch.addAll(docs)
@@ -75,15 +80,16 @@ export default function(store: StatusStore): MiniSearch {
   return buildIndexFromDocs(extractDocs(store))
 }
 
-// Grow an existing index with any toots it doesn't already hold, skipping ones
-// already indexed (toots are immutable by uri, so a present uri needs no update).
-// Used after a fetch to add just the new toots instead of rebuilding the whole
-// index. Returns how many were added.
-export function indexNewStatuses(index: MiniSearch, store: StatusStore): number {
+// Add to an index any docs it doesn't already hold, skipping ones already
+// present (toots are immutable by uri, so a present uri needs no update). Used
+// to grow the index with just the new toots after a fetch instead of rebuilding.
+// Operates on already-stripped docs, so it runs wherever the index lives (the
+// worker in production). Returns how many were added.
+export function indexDocs(index: MiniSearch, docs: IndexDoc[]): number {
   let added = 0
-  for (const [uri, status] of Object.entries(store.statuses)) {
-    if (!index.has(uri)) {
-      index.add({ uri: uri, content: searchableContent(status) })
+  for (const doc of docs) {
+    if (!index.has(doc.uri)) {
+      index.add(doc)
       added++
     }
   }
@@ -105,27 +111,21 @@ export function toPersistedIndex(store: StatusStore, index: MiniSearch): Persist
   return persistIndex(Object.keys(store.statuses).length, index)
 }
 
-// Reconstruct a searchable index on the main thread from serialized JSON — the
-// worker's build output, or a cache blob. loadJSON must be given the same options
-// the index was built with, since custom functions (tokenize) aren't serialized.
+// Reconstruct a searchable index from serialized JSON — the engine's build
+// output, or a cache blob. Runs wherever the index lives (the worker in
+// production, never the main thread). loadJSON must be given the same options the
+// index was built with, since custom functions (tokenize) aren't serialized;
+// throws on corrupt / incompatible data, which the engine turns into a rebuild.
 export function loadIndexJSON(json: string): MiniSearch {
   return MiniSearch.loadJSON(json, options)
 }
 
-// Restore a cached index, or `undefined` if the cache can't be trusted for this
-// store: wrong app version, the store has grown/shrunk since (count mismatch), or
-// the serialized data is corrupt / from an incompatible MiniSearch. In every
-// rejection the caller should rebuild from the store.
-export function restoreIndex(store: StatusStore, persisted: PersistedIndex): MiniSearch | undefined {
-  if (persisted.version !== INDEX_VERSION) {
-    return undefined
-  }
-  if (persisted.documentCount !== Object.keys(store.statuses).length) {
-    return undefined
-  }
-  try {
-    return MiniSearch.loadJSON(persisted.json, options)
-  } catch {
-    return undefined
-  }
+// Whether a cached blob is worth decoding for this store: same app version and
+// same document count (toots are append-only, so a count match means the cache
+// still covers the same set). The cheap gate the main thread runs before handing
+// the json to the engine to actually loadJSON — decodability / corruption is the
+// engine's call (it loads in the worker and reports back whether it succeeded).
+export function cacheMatches(store: StatusStore, persisted: PersistedIndex): boolean {
+  return persisted.version === INDEX_VERSION
+    && persisted.documentCount === Object.keys(store.statuses).length
 }

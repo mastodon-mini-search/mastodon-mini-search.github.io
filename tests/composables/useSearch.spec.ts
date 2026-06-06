@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { shallowRef, nextTick, type Ref } from 'vue'
-import MiniSearch from 'minisearch'
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest'
+import { ref, shallowRef, nextTick, type Ref } from 'vue'
+import type { SearchResult } from 'minisearch'
 import { useSearch } from '../../src/composables/useSearch'
 import createIndex from '../../src/functions/createIndex'
 import { StatusStore, StatusDocument, StatusType } from '../../src/models/StatusStore'
@@ -22,8 +22,12 @@ const ids = (rs: { id: string | number }[]) => rs.map(r => String(r.id)).sort()
 
 describe('useSearch', () => {
   let store: StatusStore
-  let indexRef: Ref<MiniSearch | undefined>
   let storeRef: Ref<StatusStore | undefined>
+  let ready: Ref<boolean>
+  // Search delegates to a real index but resolves asynchronously, mirroring the
+  // worker-backed engine in production. Spying on it lets tests assert it was
+  // (or wasn't) invoked.
+  let search: Mock<(query: string) => Promise<SearchResult[]>>
 
   beforeEach(() => {
     // Fake timers keep the debounce deterministic across every test: scheduled
@@ -34,8 +38,10 @@ describe('useSearch', () => {
       a: { content: '<p>alpha apple</p>', types: ['post'] },
       b: { content: '<p>alpha banana</p>', types: ['favourite'] },
     })
-    indexRef = shallowRef<MiniSearch | undefined>(createIndex(store))
+    const index = createIndex(store)
+    search = vi.fn((q: string) => Promise.resolve(index.search(q)))
     storeRef = shallowRef<StatusStore | undefined>(store)
+    ready = ref(true)
   })
 
   afterEach(() => {
@@ -43,46 +49,47 @@ describe('useSearch', () => {
     vi.useRealTimers()
   })
 
-  it('runNow searches the index immediately and publishes query/results/searched together', () => {
-    const [{ text, query, results, searched, runNow }] = withSetup(() => useSearch(indexRef, storeRef))
+  it('runNow searches the index immediately and publishes query/results/searched together', async () => {
+    const [{ text, query, results, searched, runNow }] = withSetup(() => useSearch(search, ready, storeRef))
 
     text.value = 'alpha'
-    runNow()
+    await runNow()
 
     expect(query.value).toBe('alpha')
     expect(ids(results.value)).toEqual(['a', 'b'])
     expect(searched.value).toBe(true)
   })
 
-  it('treats a blank query as no search, clearing results and the searched flag', () => {
-    const [{ text, query, results, searched, runNow }] = withSetup(() => useSearch(indexRef, storeRef))
+  it('treats a blank query as no search, clearing results and the searched flag', async () => {
+    const [{ text, query, results, searched, runNow }] = withSetup(() => useSearch(search, ready, storeRef))
 
     text.value = '   '
-    runNow()
+    await runNow()
 
     expect(query.value).toBe('')
     expect(results.value).toEqual([])
     expect(searched.value).toBe(false)
+    expect(search).not.toHaveBeenCalled()
   })
 
   it('debounces typing: a run only fires after the 250ms window', async () => {
-    const [{ text, results }] = withSetup(() => useSearch(indexRef, storeRef))
+    const [{ text, results }] = withSetup(() => useSearch(search, ready, storeRef))
 
     text.value = 'alpha'
     await nextTick() // let the watcher schedule the debounced run
 
-    vi.advanceTimersByTime(249)
+    await vi.advanceTimersByTimeAsync(249)
     expect(results.value).toEqual([]) // not yet
 
-    vi.advanceTimersByTime(1)
+    await vi.advanceTimersByTimeAsync(1)
     expect(ids(results.value)).toEqual(['a', 'b'])
   })
 
-  it('filters results by the active type toggles', () => {
-    const [{ text, results, filtered, filter, runNow }] = withSetup(() => useSearch(indexRef, storeRef))
+  it('filters results by the active type toggles', async () => {
+    const [{ text, results, filtered, filter, runNow }] = withSetup(() => useSearch(search, ready, storeRef))
 
     text.value = 'alpha'
-    runNow()
+    await runNow()
     expect(ids(results.value)).toEqual(['a', 'b'])
 
     // Default toggles: posts on, favourites off — so the favourite drops out.
@@ -92,22 +99,34 @@ describe('useSearch', () => {
     expect(ids(filtered.value)).toEqual(['a', 'b'])
   })
 
-  it('yields no filtered results when there is no active store', () => {
+  it('yields no filtered results when there is no active store', async () => {
     const [{ text, results, filtered, runNow }] =
-      withSetup(() => useSearch(indexRef, shallowRef<StatusStore | undefined>(undefined)))
+      withSetup(() => useSearch(search, ready, shallowRef<StatusStore | undefined>(undefined)))
 
     text.value = 'alpha'
-    runNow()
+    await runNow()
 
     expect(results.value.length).toBeGreaterThan(0)
     expect(filtered.value).toEqual([])
   })
 
-  it('reset clears the search state', () => {
-    const [{ text, query, results, searched, reset, runNow }] = withSetup(() => useSearch(indexRef, storeRef))
+  it('does not search while the index is not ready yet', async () => {
+    ready.value = false
+    const [{ text, results, searched, runNow }] = withSetup(() => useSearch(search, ready, storeRef))
 
     text.value = 'alpha'
-    runNow()
+    await runNow()
+
+    expect(search).not.toHaveBeenCalled()
+    expect(results.value).toEqual([])
+    expect(searched.value).toBe(true) // a query was entered, it just found nothing
+  })
+
+  it('reset clears the search state', async () => {
+    const [{ text, query, results, searched, reset, runNow }] = withSetup(() => useSearch(search, ready, storeRef))
+
+    text.value = 'alpha'
+    await runNow()
     expect(results.value.length).toBeGreaterThan(0)
 
     reset()
@@ -118,27 +137,42 @@ describe('useSearch', () => {
   })
 
   it('reset cancels a pending debounced run so a stale query cannot repopulate results', async () => {
-    const [{ text, results, reset }] = withSetup(() => useSearch(indexRef, storeRef))
-    const search = vi.spyOn(indexRef.value!, 'search')
+    const [{ text, results, reset }] = withSetup(() => useSearch(search, ready, storeRef))
 
     text.value = 'alpha'
     await nextTick() // a run is now scheduled
     reset()
 
-    vi.advanceTimersByTime(500)
+    await vi.advanceTimersByTimeAsync(500)
     expect(search).not.toHaveBeenCalled()
     expect(results.value).toEqual([])
   })
 
+  it('drops an in-flight run whose result lands after reset (stale corpus guard)', async () => {
+    // A search that resolves only when we say so, so reset() can land between the
+    // call and its resolution — exactly the account-switch race.
+    let resolveSearch!: (rs: SearchResult[]) => void
+    const deferred = vi.fn((_q: string) => new Promise<SearchResult[]>(res => { resolveSearch = res }))
+    const [{ text, results, searched, runNow, reset }] = withSetup(() => useSearch(deferred, ready, storeRef))
+
+    text.value = 'alpha'
+    const pending = runNow() // search called, now awaiting
+    reset()                  // supersedes the in-flight run
+    resolveSearch([{ id: 'a' } as unknown as SearchResult])
+    await pending
+
+    expect(results.value).toEqual([]) // stale result dropped, not published
+    expect(searched.value).toBe(false)
+  })
+
   it('cancels the pending debounce on unmount', async () => {
-    const [{ text }, unmount] = withSetup(() => useSearch(indexRef, storeRef))
-    const search = vi.spyOn(indexRef.value!, 'search')
+    const [{ text }, unmount] = withSetup(() => useSearch(search, ready, storeRef))
 
     text.value = 'alpha'
     await nextTick() // schedule the run
     unmount()
 
-    vi.advanceTimersByTime(500)
+    await vi.advanceTimersByTimeAsync(500)
     expect(search).not.toHaveBeenCalled()
   })
 })

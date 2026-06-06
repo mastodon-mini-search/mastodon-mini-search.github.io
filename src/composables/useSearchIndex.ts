@@ -1,65 +1,79 @@
-import { shallowRef, ref, Ref } from 'vue'
-import MiniSearch from 'minisearch'
+import { ref, Ref } from 'vue'
+import { SearchResult } from 'minisearch'
 import { StatusStore } from '../models/StatusStore'
-import { PersistedIndex } from '../models/PersistedIndex'
 import sessions from '../functions/sessions'
-import { extractDocs, loadIndexJSON, restoreIndex, indexNewStatuses, toPersistedIndex } from '../functions/createIndex'
-import type { IndexDoc } from '../functions/createIndex'
-import { buildPersistedIndex } from '../functions/buildIndex'
+import { extractDocs, cacheMatches } from '../functions/createIndex'
+import type { IndexEngine } from '../functions/indexEngine'
+import { createWorkerEngine } from '../functions/indexWorkerEngine'
 
-// Owns the MiniSearch index for the active account: restoring it from cache,
-// building it from the toots (off the main thread, in a worker), growing it as
-// new toots arrive, and re-caching it so the next cold start can skip the
-// rebuild. `store` is passed as a ref so `grow` always indexes whatever the
-// active store currently holds; `load` takes its store explicitly since the
-// caller swaps it in around the rebuild.
+// Owns the search index for the active account. The index itself lives behind an
+// IndexEngine — in production a Web Worker (createWorkerEngine) that holds the
+// MiniSearch off the main thread, so neither loadJSON (restoring a ~16MB cache)
+// nor search ever blocks the page. This composable only orchestrates it:
+// restore-or-build on load, grow on fetch, drop on switch, and mirror which toots
+// are indexed. `store` is a ref so `grow` indexes whatever the active store
+// currently holds; `load` takes its store explicitly since the caller swaps it in
+// around a rebuild.
 //
-// `build` is injected (defaulting to the worker) so tests can build in-process
-// instead of spawning a worker happy-dom can't run.
+// `engine` is injected (defaulting to the worker) so tests run the index
+// in-process instead of spawning a worker happy-dom can't host.
 export function useSearchIndex(
   store: Ref<StatusStore | undefined>,
-  build: (docs: IndexDoc[]) => Promise<PersistedIndex> = buildPersistedIndex,
+  engine: IndexEngine = createWorkerEngine(),
 ) {
-  const index = shallowRef<MiniSearch | undefined>(undefined)
+  // True once the engine holds a usable index for the active account, so the UI
+  // shows the search box instead of the "load first" hint or the building one.
+  const ready = ref(false)
 
-  // True while the index is being (re)loaded for the active account — a cache
-  // restore or a full worker rebuild — so the UI shows an indexing indicator
-  // instead of the "load first" hint. Left false during incremental `grow`,
-  // which is fast and shouldn't flicker the indicator.
+  // True while (re)loading the index for the active account — a cache restore or
+  // a full build — so the UI shows an indexing indicator. Left false during the
+  // incremental `grow`, which is fast and shouldn't flicker the indicator.
   const building = ref(false)
 
-  // Generation guard. The worker build is async, so an account switch can land
-  // mid-build; every load/grow/clear bumps this, and a build only publishes if
-  // it's still the latest request. Without it, a build that finishes after the
-  // active account changed would clobber `index` with the wrong account's data.
+  // The uris the engine's index currently holds, mirrored on the main thread so a
+  // `grow` strips and ships only the new toots (keeping the heavy stripHTML
+  // minimal) rather than re-sending the whole corpus. The engine has-checks
+  // defensively, so a stale mirror only costs redundant work, never a wrong index.
+  let indexedUris = new Set<string>()
+
+  // Generation guard. Engine calls are async, so an account switch can land
+  // mid-load/grow; every load/clear bumps this and each awaited step bails if a
+  // newer request (or a clear) superseded it, so a stale result can't publish the
+  // wrong account's index.
   let generation = 0
 
-  // Build from the store off the main thread and publish — unless a newer
-  // request (or a clear) superseded this one while the worker ran. Caches the
-  // result so the next cold start can restore instead of rebuild. Shared by
-  // `load`'s cache miss and `grow`'s first build.
+  // Build from the store via the engine and publish — unless superseded while it
+  // ran. Caches the result so the next cold start can restore instead of rebuild.
   async function buildFresh(s: StatusStore, mine: number): Promise<void> {
-    const persisted = await build(extractDocs(s))
+    const persisted = await engine.build(extractDocs(s))
     if (mine !== generation) {
       return
     }
-    index.value = loadIndexJSON(persisted.json)
+    indexedUris = new Set(Object.keys(s.statuses))
+    ready.value = true
     await sessions.saveIndex(s.account, persisted)
   }
 
   // Restore the cached index if one is stored and still valid; otherwise build
-  // from the toots. Publishes into `index`.
+  // from the toots.
   async function load(s: StatusStore): Promise<void> {
     const mine = ++generation
     building.value = true
+    ready.value = false
     try {
       const cached = await sessions.loadIndex(s.account)
       if (mine !== generation) {
         return
       }
-      const restored = cached && restoreIndex(s, cached)
-      if (restored) {
-        index.value = restored
+      if (cached && cacheMatches(s, cached) && await engine.restore(cached.json)) {
+        if (mine !== generation) {
+          return
+        }
+        indexedUris = new Set(Object.keys(s.statuses))
+        ready.value = true
+        return
+      }
+      if (mine !== generation) {
         return
       }
       await buildFresh(s, mine)
@@ -71,18 +85,28 @@ export function useSearchIndex(
   }
 
   // A fetch finished: the store was mutated in place and already persisted by
-  // fetchStatuses. Grow the existing index with just the new toots — cheap, so
-  // it stays on the main thread — then re-cache it. If there's no index yet
-  // (e.g. the first fetch right after setup), build it fresh in the worker.
+  // fetchStatuses. Grow the index with just the toots it doesn't already hold,
+  // then re-cache it — cheap, so it stays inline. If there's no index yet (the
+  // first fetch right after setup), build it fresh instead.
   async function grow(): Promise<void> {
     const s = store.value
     if (!s) {
       return
     }
-    const idx = index.value
-    if (idx) {
-      indexNewStatuses(idx, s)
-      await sessions.saveIndex(s.account, toPersistedIndex(s, idx))
+    if (ready.value) {
+      const mine = generation
+      const docs = extractDocs(s, indexedUris)
+      if (docs.length === 0) {
+        return
+      }
+      const persisted = await engine.grow(docs)
+      if (mine !== generation) {
+        return
+      }
+      for (const doc of docs) {
+        indexedUris.add(doc.uri)
+      }
+      await sessions.saveIndex(s.account, persisted)
       return
     }
     const mine = ++generation
@@ -98,12 +122,20 @@ export function useSearchIndex(
 
   // Drop the index (while a switch rebuilds it, or on logout) so a stale index
   // can't be searched against the new account. Bumps the generation so an
-  // in-flight build can't republish the index we just cleared.
+  // in-flight load/grow can't republish what we just cleared.
   function clear(): void {
     generation++
     building.value = false
-    index.value = undefined
+    ready.value = false
+    indexedUris = new Set()
+    engine.clear()
   }
 
-  return { index, building, load, grow, clear }
+  // Run a query against the active account's index (off the main thread in
+  // production). Resolves to empty if there's no index yet.
+  function search(query: string): Promise<SearchResult[]> {
+    return engine.search(query)
+  }
+
+  return { ready, building, search, load, grow, clear }
 }
