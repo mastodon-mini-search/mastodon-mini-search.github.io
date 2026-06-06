@@ -19,7 +19,7 @@
 
     <template v-if="index">
       <section class="search">
-        <Searcher :key="accountKey" :index="index" @search="onSearch"/>
+        <Searcher v-model="text" @submit="runNow"/>
         <div class="search-bar">
           <Filter :filter="filter"/>
           <span v-if="searched" class="count">{{ filtered.length }} 條結果</span>
@@ -37,54 +37,40 @@
 
 <script setup lang="ts">
 import Setup from "./Setup.vue"
-import { shallowRef, ShallowRef, reactive, ref, computed } from "vue"
+import { shallowRef, ShallowRef, ref, computed } from "vue"
 import { StatusStore } from "../models/StatusStore"
 import sessions, { storeKey } from "../functions/sessions"
 import Loader from './Loader.vue'
-import MiniSearch, { SearchResult } from 'minisearch'
+import MiniSearch from 'minisearch'
 import Filter from './Filter.vue'
 import Searcher from './Searcher.vue'
 import Results from './Results.vue'
 import createIndex, { toPersistedIndex, restoreIndex, indexNewStatuses } from '../functions/createIndex'
-import FilterState from '../models/FilterState'
 import AccountSwitcher from './AccountSwitcher.vue'
 import { completeLoginFromRedirect } from '../functions/oauth'
+import { useSearch } from '../composables/useSearch'
 
-// If this load is an OAuth callback, finish the login and make the freshly
-// authorized account active; otherwise just resume the last active account.
-const authed = await completeLoginFromRedirect()
-const store: ShallowRef<StatusStore | undefined> = shallowRef(
-  authed ? await sessions.addResolvedSession(authed) : await sessions.loadActiveStore()
-)
+const store: ShallowRef<StatusStore | undefined> = shallowRef(undefined)
 const index: ShallowRef<MiniSearch | undefined> = shallowRef(undefined)
-const filter: FilterState = reactive({
-  post: true,
-  boost: true,
-  favourite: false,
-  bookmark: false
-})
-const results: ShallowRef<SearchResult[]> = shallowRef([])
-const query = ref('')
-const searched = ref(false)
+
+// Search state + behaviour (live box text, committed query, type filter,
+// debounce, filtered results) lives in one composable; this component only
+// wires it to the active index and clears it on account changes. Created before
+// the awaits below so its onBeforeUnmount registers during synchronous setup.
+const { text, query, results, filtered, searched, filter, runNow, reset } = useSearch(index, store)
+
 // When true, the Setup screen is shown on top of an existing session to add
 // another account (the switcher's "新增帳號" routes here instead of an inline
 // form). Reset once the new account lands or the user backs out.
 const addingAccount = ref(false)
 
-// Keys the per-account child UI (Loader count, Searcher query box) so their
-// internal state resets when the active account changes.
+// Keys the per-account Loader so its counts reset when the active account changes.
 const accountKey = computed(() => (store.value ? storeKey(store.value.account) : ''))
 
-// Filter the raw results by the active type toggles. Lifted here (rather than
-// inside Results) so the result count and empty states can react to it too.
-const filtered = computed(() => {
-  const s = store.value
-  if (!s) {
-    return []
-  }
-  return results.value.filter(r => s.statuses[r.id].types.some(t => filter[t]))
-})
-
+// Bootstrap: if this load is an OAuth callback, finish the login and make the
+// freshly authorized account active; otherwise resume the last active account.
+const authed = await completeLoginFromRedirect()
+store.value = authed ? await sessions.addResolvedSession(authed) : await sessions.loadActiveStore()
 if (store.value) {
   index.value = await loadOrBuildIndex(store.value)
 }
@@ -106,9 +92,7 @@ async function loadOrBuildIndex(s: StatusStore): Promise<MiniSearch> {
 // session. Clear the active search first so backing out doesn't reveal a stale
 // query box against still-listed results.
 function startAddAccount() {
-  results.value = []
-  query.value = ''
-  searched.value = false
+  reset()
   addingAccount.value = true
 }
 
@@ -145,14 +129,6 @@ function onFetched() {
   sessions.saveIndex(s.account, toPersistedIndex(s, idx))
 }
 
-// A non-empty query counts as "searched"; clearing the box returns to the idle
-// hint rather than showing a misleading "0 條結果".
-function onSearch(q: string, rs: SearchResult[]) {
-  query.value = q
-  results.value = rs
-  searched.value = q.length > 0
-}
-
 // The switcher already performed the data-layer change (switch / add / remove);
 // here we just swap in the new active store — rebuilding its index and clearing
 // the previous search — or fall back to Setup when no account remains.
@@ -161,12 +137,10 @@ async function onAccountChanged(s: StatusStore | undefined) {
     resetToSetup()
     return
   }
-  // Clear the previous account's results before swapping the store, so a
+  // Clear the previous account's search before swapping the store, so a
   // re-render can't look up stale result ids against the new store. Drop the
   // index too while it rebuilds, so a stale index can't be searched mid-switch.
-  results.value = []
-  query.value = ''
-  searched.value = false
+  reset()
   index.value = undefined
   store.value = s
   index.value = await loadOrBuildIndex(s)
@@ -175,9 +149,7 @@ async function onAccountChanged(s: StatusStore | undefined) {
 function resetToSetup() {
   store.value = undefined
   index.value = undefined
-  results.value = []
-  query.value = ''
-  searched.value = false
+  reset()
 }
 </script>
 

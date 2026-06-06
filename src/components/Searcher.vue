@@ -1,5 +1,5 @@
 <template>
-  <form class="searcher" role="search" @submit.prevent="runNow">
+  <form class="searcher" role="search" @submit.prevent="$emit('submit')">
     <span class="icon" aria-hidden="true">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none"
            stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -10,7 +10,7 @@
     <input
       ref="input"
       type="search"
-      v-model="query"
+      v-model="text"
       placeholder="搜索你的嘟文…"
       aria-label="搜索"
       autocomplete="off"
@@ -18,7 +18,7 @@
       spellcheck="false"
     />
     <button
-      v-if="query"
+      v-if="text"
       type="button"
       class="clear"
       aria-label="清除"
@@ -28,43 +28,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onBeforeUnmount } from 'vue'
-import MiniSearch, { SearchResult } from 'minisearch'
+import { ref } from 'vue'
 
-const props = defineProps<{
-  index: MiniSearch
-}>()
-const emit = defineEmits<{
-  (e: 'search', query: string, results: SearchResult[]): void
+// Purely the input box. The parent's useSearch composable owns the debounce,
+// the committed query, and running the index — this just edits the live text
+// (two-way via v-model) and reports Enter so the parent can search immediately.
+const text = defineModel<string>({ required: true })
+defineEmits<{
+  (e: 'submit'): void
 }>()
 
-const query = ref('')
 const input = ref<HTMLInputElement | null>(null)
-let timer: ReturnType<typeof setTimeout> | undefined
-
-function search() {
-  const q = query.value.trim()
-  emit('search', q, q ? props.index.search(q) : [])
-}
-
-// Search as the user types, but debounce so we don't churn on every keystroke.
-watch(query, () => {
-  clearTimeout(timer)
-  timer = setTimeout(search, 250)
-})
-
-// Enter (form submit) searches immediately rather than waiting on the debounce.
-function runNow() {
-  clearTimeout(timer)
-  search()
-}
 
 function clear() {
-  query.value = ''
+  text.value = ''
   input.value?.focus()
 }
-
-onBeforeUnmount(() => clearTimeout(timer))
 </script>
 
 <style scoped>
