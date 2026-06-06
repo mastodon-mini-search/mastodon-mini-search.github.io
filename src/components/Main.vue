@@ -30,6 +30,10 @@
       <p v-else-if="filtered.length === 0" class="hint">{{ results.length }} 條結果都被類型篩選擋掉了，試著多勾選幾個類型。</p>
       <Results v-else :results="filtered" :store="store"/>
     </template>
+    <p v-else-if="building" class="hint building">
+      <span class="spinner" aria-hidden="true"></span>
+      正在建立搜索索引…
+    </p>
     <p v-else class="hint">先載入嘟文，建立搜索索引。</p>
   </template>
 </template>
@@ -54,7 +58,7 @@ import { useSearch } from '../composables/useSearch'
 // and reacts to the active account changing. `useSearch` registers an
 // onBeforeUnmount, so it must run before the awaits below, during synchronous setup.
 const { activeStore: store, bootstrap } = useSessions()
-const { index, load: loadIndex, grow: growIndex, clear: clearIndex } = useSearchIndex(store)
+const { index, building, load: loadIndex, grow: growIndex, clear: clearIndex } = useSearchIndex(store)
 const { text, query, results, filtered, searched, filter, runNow, reset } = useSearch(index, store)
 
 // When true, the Setup screen is shown on top of an existing session to add
@@ -81,10 +85,15 @@ async function applyActiveStore(s: StatusStore | undefined) {
   }
 }
 
-// Bootstrap (OAuth callback or resume), then load its index up front so the app
-// paints with search ready. Wire the watcher afterwards so this initial load
-// doesn't double-fire it; it then handles every later account change.
-await applyActiveStore(await bootstrap())
+// Bootstrap (OAuth callback or resume) before first paint — that's the only
+// thing Suspense waits on, and it's just storage I/O. Building the index is
+// deliberately NOT awaited here: it can take a beat on a large account, so we
+// let the shell paint and run the build in a worker (useSearchIndex), surfacing
+// progress via `building` rather than blocking behind the Suspense fallback.
+// Wire the watcher after this initial kick-off so it only handles later account
+// changes (no double-fire on the first store).
+await bootstrap()
+void applyActiveStore(store.value)
 watch(store, applyActiveStore)
 
 // The switcher asked to add an account: show the Setup screen over the current
@@ -168,5 +177,24 @@ function startAddAccount() {
   text-align: center;
   padding: 2.5rem 1rem;
   margin: 0;
+}
+.building {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+}
+.spinner {
+  width: 1.1rem;
+  height: 1.1rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

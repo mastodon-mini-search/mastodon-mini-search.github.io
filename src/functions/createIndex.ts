@@ -46,15 +46,33 @@ function searchableContent(status: StatusDocument): string {
   return parts.join(' ')
 }
 
-export default function(store: StatusStore) {
+// One ready-to-index document: a toot's uri and its already-stripped searchable
+// text. The unit that crosses the worker boundary, so it's plain and DOM-free.
+export interface IndexDoc {
+  uri: string
+  content: string
+}
+
+// Pull the searchable docs out of a store. Touches the DOM (stripHTML), so this
+// runs on the main thread — the worker is handed the stripped docs, not the raw
+// statuses, because a worker has no `document`.
+export function extractDocs(store: StatusStore): IndexDoc[] {
+  return Object.entries(store.statuses).map(([uri, status]) => ({
+    uri: uri,
+    content: searchableContent(status)
+  }))
+}
+
+// Build an index from already-extracted docs. DOM-free (the tokenizer only does
+// string work), so this is the half that can run in a worker — see index.worker.ts.
+export function buildIndexFromDocs(docs: IndexDoc[]): MiniSearch {
   const miniSearch = new MiniSearch(options)
-  Object.entries(store.statuses).forEach(([uri, status]) => {
-    miniSearch.add({
-      uri: uri,
-      content: searchableContent(status)
-    })
-  })
+  miniSearch.addAll(docs)
   return miniSearch
+}
+
+export default function(store: StatusStore): MiniSearch {
+  return buildIndexFromDocs(extractDocs(store))
 }
 
 // Grow an existing index with any toots it doesn't already hold, skipping ones
@@ -72,13 +90,26 @@ export function indexNewStatuses(index: MiniSearch, store: StatusStore): number 
   return added
 }
 
-// Package a freshly built index for persistence alongside its store.
-export function toPersistedIndex(store: StatusStore, index: MiniSearch): PersistedIndex {
+// Package a built index for persistence: its serialized form tagged with the
+// current version and the document count it covers (the cheap restore check).
+export function persistIndex(documentCount: number, index: MiniSearch): PersistedIndex {
   return {
     version: INDEX_VERSION,
-    documentCount: Object.keys(store.statuses).length,
+    documentCount: documentCount,
     json: JSON.stringify(index)
   }
+}
+
+// Package a freshly built index for persistence alongside its store.
+export function toPersistedIndex(store: StatusStore, index: MiniSearch): PersistedIndex {
+  return persistIndex(Object.keys(store.statuses).length, index)
+}
+
+// Reconstruct a searchable index on the main thread from serialized JSON — the
+// worker's build output, or a cache blob. loadJSON must be given the same options
+// the index was built with, since custom functions (tokenize) aren't serialized.
+export function loadIndexJSON(json: string): MiniSearch {
+  return MiniSearch.loadJSON(json, options)
 }
 
 // Restore a cached index, or `undefined` if the cache can't be trusted for this

@@ -2,9 +2,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { shallowRef } from 'vue'
 import { useSearchIndex } from '../../src/composables/useSearchIndex'
 import sessions from '../../src/functions/sessions'
-import createIndex, { toPersistedIndex, INDEX_VERSION } from '../../src/functions/createIndex'
+import createIndex, { toPersistedIndex, INDEX_VERSION, buildIndexFromDocs, persistIndex } from '../../src/functions/createIndex'
+import type { IndexDoc } from '../../src/functions/createIndex'
 import { StatusStore, StatusDocument } from '../../src/models/StatusStore'
 import { PersistedIndex } from '../../src/models/PersistedIndex'
+
+// In production useSearchIndex builds in a Web Worker; happy-dom can't run one,
+// so inject a synchronous in-process builder. It still goes through the real
+// serialize step (persistIndex), so the composable exercises the same
+// JSON -> loadIndexJSON round-trip the worker path does.
+const build = (docs: IndexDoc[]) => Promise.resolve(persistIndex(docs.length, buildIndexFromDocs(docs)))
 
 function storeWith(contents: Record<string, string>): StatusStore {
   const statuses: Record<string, StatusDocument> = {}
@@ -36,7 +43,7 @@ describe('useSearchIndex', () => {
 
   it('load builds the index from the store and caches it when nothing is cached', async () => {
     const store = storeWith({ a: '<p>alpha</p>', b: '<p>beta</p>' })
-    const { index, load } = useSearchIndex(shallowRef<StatusStore | undefined>(store))
+    const { index, load } = useSearchIndex(shallowRef<StatusStore | undefined>(store), build)
 
     await load(store)
 
@@ -54,7 +61,7 @@ describe('useSearchIndex', () => {
   it('load restores a valid cached index without rebuilding or re-caching', async () => {
     const store = storeWith({ a: '<p>alpha</p>' })
     loadIndex.mockResolvedValue(toPersistedIndex(store, createIndex(store)))
-    const { index, load } = useSearchIndex(shallowRef<StatusStore | undefined>(store))
+    const { index, load } = useSearchIndex(shallowRef<StatusStore | undefined>(store), build)
 
     await load(store)
 
@@ -68,7 +75,7 @@ describe('useSearchIndex', () => {
     const stale = toPersistedIndex(store, createIndex(store))
     stale.version = INDEX_VERSION + 1
     loadIndex.mockResolvedValue(stale)
-    const { index, load } = useSearchIndex(shallowRef<StatusStore | undefined>(store))
+    const { index, load } = useSearchIndex(shallowRef<StatusStore | undefined>(store), build)
 
     await load(store)
 
@@ -76,24 +83,24 @@ describe('useSearchIndex', () => {
     expect(saveIndex).toHaveBeenCalledTimes(1) // rebuilt and re-cached
   })
 
-  it('grow builds the index when there is none yet and caches it', () => {
+  it('grow builds the index when there is none yet and caches it', async () => {
     const store = storeWith({ a: '<p>alpha</p>' })
-    const { index, grow } = useSearchIndex(shallowRef<StatusStore | undefined>(store))
+    const { index, grow } = useSearchIndex(shallowRef<StatusStore | undefined>(store), build)
 
-    grow()
+    await grow()
 
     expect(found(index.value!, 'alpha')).toEqual(['a'])
     expect(saveIndex).toHaveBeenCalledTimes(1)
   })
 
-  it('grow extends the existing index with newly fetched toots in place, then re-caches', () => {
+  it('grow extends the existing index with newly fetched toots in place, then re-caches', async () => {
     const store = storeWith({ a: '<p>alpha</p>' })
-    const { index, grow } = useSearchIndex(shallowRef<StatusStore | undefined>(store))
+    const { index, grow } = useSearchIndex(shallowRef<StatusStore | undefined>(store), build)
 
-    grow() // initial build
+    await grow() // initial build
     const built = index.value
     store.statuses['b'] = { content: '<p>beta</p>', createdAt: '', types: ['post'], acct: 'tester', id: 'b' }
-    grow() // grows the same instance rather than rebuilding
+    await grow() // grows the same instance rather than rebuilding
 
     expect(index.value).toBe(built)
     expect(found(index.value!, 'beta')).toEqual(['b'])
@@ -101,20 +108,20 @@ describe('useSearchIndex', () => {
     expect(saveIndex).toHaveBeenCalledTimes(2)
   })
 
-  it('grow is a no-op when there is no active store', () => {
-    const { index, grow } = useSearchIndex(shallowRef<StatusStore | undefined>(undefined))
+  it('grow is a no-op when there is no active store', async () => {
+    const { index, grow } = useSearchIndex(shallowRef<StatusStore | undefined>(undefined), build)
 
-    grow()
+    await grow()
 
     expect(index.value).toBeUndefined()
     expect(saveIndex).not.toHaveBeenCalled()
   })
 
-  it('clear drops the index so a stale one cannot be searched against a new account', () => {
+  it('clear drops the index so a stale one cannot be searched against a new account', async () => {
     const store = storeWith({ a: '<p>alpha</p>' })
-    const { index, grow, clear } = useSearchIndex(shallowRef<StatusStore | undefined>(store))
+    const { index, grow, clear } = useSearchIndex(shallowRef<StatusStore | undefined>(store), build)
 
-    grow()
+    await grow()
     expect(index.value).toBeDefined()
 
     clear()
