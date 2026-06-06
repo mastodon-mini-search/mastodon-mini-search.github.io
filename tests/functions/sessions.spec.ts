@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { SessionRepository, KeyValueStore, storeKey } from '../../src/functions/sessions'
+import { SessionRepository, KeyValueStore, storeKey, indexKey } from '../../src/functions/sessions'
 import { ResolvedAccountSetting } from '../../src/models/AccountSetting'
 import { SessionRegistry } from '../../src/models/Session'
 import { StatusStore } from '../../src/models/StatusStore'
+import { PersistedIndex } from '../../src/models/PersistedIndex'
 
 // In-memory KeyValueStore so the session logic runs without IndexedDB.
 function memoryKv(): KeyValueStore & { map: Map<string, unknown> } {
@@ -110,6 +111,32 @@ describe('SessionRepository', () => {
     await repo.removeSession(storeKey(accounts['alice@a.social']))
     expect(await repo.getActiveKey()).toBeNull()
     expect(await repo.loadActiveStore()).toBeUndefined()
+  })
+
+  it('saveIndex / loadIndex round-trips a cached index, keyed per account', async () => {
+    await repo.addSession('alice@a.social')
+    const account = accounts['alice@a.social']
+    const cache: PersistedIndex = { version: 1, documentCount: 2, json: '{"v":1}' }
+
+    await repo.saveIndex(account, cache)
+    expect(await repo.loadIndex(account)).toEqual(cache)
+    // Stored under its own index namespace, distinct from the store key.
+    expect(kv.map.has(indexKey(account))).toBe(true)
+    expect(indexKey(account)).not.toBe(storeKey(account))
+  })
+
+  it('loadIndex returns undefined when no index is cached', async () => {
+    expect(await repo.loadIndex(accounts['alice@a.social'])).toBeUndefined()
+  })
+
+  it('removeSession also deletes the derived index cache', async () => {
+    await repo.addSession('alice@a.social')
+    const account = accounts['alice@a.social']
+    await repo.saveIndex(account, { version: 1, documentCount: 0, json: '{}' })
+
+    await repo.removeSession(storeKey(account))
+    expect(kv.map.has(indexKey(account))).toBe(false)
+    expect(await repo.loadIndex(account)).toBeUndefined()
   })
 
   it('migrates a legacy single-store blob on first read', async () => {

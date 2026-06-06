@@ -2,6 +2,7 @@ import localforage from "localforage"
 import { ResolvedAccountSetting } from "../models/AccountSetting"
 import { SessionRegistry } from "../models/Session"
 import { StatusStore } from "../models/StatusStore"
+import { PersistedIndex } from "../models/PersistedIndex"
 import resolveAccount from "./resolveAccount"
 
 // One registry record under a fixed key; each account's toots under their own
@@ -24,6 +25,13 @@ export interface KeyValueStore {
 // collide.
 export function storeKey(account: { instanceUrl: string; accountId: string }): string {
   return `store:${account.instanceUrl}:${account.accountId}`
+}
+
+// The cached search index lives under its own namespace, parallel to the store.
+// Kept separate so it can be loaded/rebuilt/dropped independently of the toots
+// (it's a derived, throwaway artifact — see PersistedIndex).
+export function indexKey(account: { instanceUrl: string; accountId: string }): string {
+  return `index:${account.instanceUrl}:${account.accountId}`
 }
 
 function emptyStore(account: ResolvedAccountSetting): StatusStore {
@@ -87,6 +95,16 @@ export class SessionRepository {
     await this.kv.setItem(storeKey(store.account), store)
   }
 
+  // The cached search index for an account, or undefined if none is stored.
+  // Opaque here — validity (version/count/decode) is the index layer's call.
+  async loadIndex(account: { instanceUrl: string; accountId: string }): Promise<PersistedIndex | undefined> {
+    return (await this.kv.getItem<PersistedIndex>(indexKey(account))) ?? undefined
+  }
+
+  async saveIndex(account: { instanceUrl: string; accountId: string }, index: PersistedIndex): Promise<void> {
+    await this.kv.setItem(indexKey(account), index)
+  }
+
   async setActive(key: string | null): Promise<void> {
     const registry = await this.loadRegistry()
     registry.activeKey = key
@@ -117,11 +135,16 @@ export class SessionRepository {
   // remaining account, else go inactive.
   async removeSession(key: string): Promise<void> {
     const registry = await this.loadRegistry()
+    const removed = registry.accounts.find(a => storeKey(a) === key)
     registry.accounts = registry.accounts.filter(a => storeKey(a) !== key)
     if (registry.activeKey === key) {
       registry.activeKey = registry.accounts.length > 0 ? storeKey(registry.accounts[0]) : null
     }
     await this.kv.removeItem(key)
+    // Drop the derived index cache too, so it can't outlive its toots.
+    if (removed) {
+      await this.kv.removeItem(indexKey(removed))
+    }
     await this.saveRegistry(registry)
   }
 }

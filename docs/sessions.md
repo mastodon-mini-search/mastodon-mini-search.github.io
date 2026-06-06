@@ -20,6 +20,7 @@
 |----|------|------|
 | `sessions` | `SessionRegistry` | 账号注册表 + 当前激活键 |
 | `store:${instanceUrl}:${accountId}` | `StatusStore` | 单账号的嘟文/位置/账号信息 |
+| `index:${instanceUrl}:${accountId}` | `PersistedIndex` | 单账号搜索索引的序列化缓存（派生物，可随时丢弃重建） |
 
 ```ts
 interface SessionRegistry {
@@ -40,8 +41,18 @@ interface SessionRegistry {
 - `setActive(key)`：只改激活指针。**不动任何数据**——这是「切换」的底座。
 - `loadActiveStore()`：读激活账号的 store；无激活账号返回 `undefined`。
 - `saveStore(store)`：按 `store.account` 算键写回。
-- `removeSession(key)`：删该账号数据 + 出注册表；若它正激活，则回退到
-  剩余的第一个账号，没有了就置 `null`。
+- `loadIndex(account)` / `saveIndex(account, index)`：按账号读写序列化的
+  搜索索引缓存（`index:` 键）。这里只当不透明 blob 存取，是否可用
+  （版本号 / 文档数 / 反序列化）由索引层 `restoreIndex` 判定。
+- `removeSession(key)`：删该账号数据 **+ 索引缓存** + 出注册表；若它正激活，
+  则回退到剩余的第一个账号，没有了就置 `null`。
+
+> 索引缓存是**派生物**，生命周期全在 `Main`：启动时优先 `loadJSON` 还原缓存，
+> 校验不过（版本/数量不符、解析失败）就从嘟文重建并写回；每次抓取后只把
+> **新增**嘟文 `add()` 进现有索引（增量，`indexNewStatuses` 靠 `index.has(uri)`
+> 跳过已有的，不全量重建），再重新持久化。`Loader` 只负责抓取，不碰索引。
+> 版本号 `INDEX_VERSION` 定义在 `createIndex.ts`——改动分词/索引内容时务必
+> 递增,以作废旧缓存。
 
 > 当前 UI 仍是单账号：`Setup` 走 `addSession`，`Main` 的「退出」走
 > `removeSession`（删当前账号、回到 Setup）。切换器 UI 尚未接入，但

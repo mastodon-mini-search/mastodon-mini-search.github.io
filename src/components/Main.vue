@@ -3,7 +3,7 @@
   <div v-if="store">
     當前賬號：{{ store.account.acct }} <BlockingButton :click="logOut">退出</BlockingButton>
   </div>
-  <Loader v-if="store" :store="store" @loadComplete="saveStoreAndIndex"/>
+  <Loader v-if="store" :store="store" @loadComplete="onFetched"/>
   <Searcher v-if="index" :index="index" @searchComplete="saveResults"/>
   <Filter v-if="index" :filter="filter"/>
   <Results v-if="store && results.length > 0" :results="results" :store="store" :filter="filter"/>
@@ -19,7 +19,7 @@ import MiniSearch, { SearchResult } from 'minisearch'
 import Filter from './Filter.vue'
 import Searcher from './Searcher.vue'
 import Results from './Results.vue'
-import createIndex from '../functions/createIndex'
+import createIndex, { toPersistedIndex, restoreIndex, indexNewStatuses } from '../functions/createIndex'
 import FilterState from '../models/FilterState'
 import BlockingButton from './BlockingButton.vue'
 
@@ -34,7 +34,20 @@ const filter: FilterState = reactive({
 const results: ShallowRef<SearchResult[]> = shallowRef([])
 
 if (store.value) {
-  index.value = createIndex(store.value)
+  index.value = await loadOrBuildIndex(store.value)
+}
+
+// Restore the cached index if one is stored and still valid; otherwise rebuild
+// from the toots and cache the result for next time.
+async function loadOrBuildIndex(s: StatusStore): Promise<MiniSearch> {
+  const cached = await sessions.loadIndex(s.account)
+  const restored = cached && restoreIndex(s, cached)
+  if (restored) {
+    return restored
+  }
+  const built = createIndex(s)
+  await sessions.saveIndex(s.account, toPersistedIndex(s, built))
+  return built
 }
 
 function saveStoreCreated(storeCreated: StatusStore) {
@@ -42,10 +55,23 @@ function saveStoreCreated(storeCreated: StatusStore) {
   store.value = storeCreated
 }
 
-function saveStoreAndIndex(storeToSave: StatusStore, indexToSave: MiniSearch) {
-  sessions.saveStore(storeToSave)
-  store.value = storeToSave
-  index.value = indexToSave
+// A fetch finished: the store was mutated in place and already persisted by
+// fetchStatuses. Grow the existing index with just the new toots — or build it
+// fresh if there's none yet (e.g. right after setup) — then re-cache it so the
+// next cold start can skip the rebuild.
+function onFetched() {
+  const s = store.value
+  if (!s) {
+    return
+  }
+  let idx = index.value
+  if (idx) {
+    indexNewStatuses(idx, s)
+  } else {
+    idx = createIndex(s)
+    index.value = idx
+  }
+  sessions.saveIndex(s.account, toPersistedIndex(s, idx))
 }
 
 function saveResults(rs: SearchResult[]) {
