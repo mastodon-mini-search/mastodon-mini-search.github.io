@@ -5,9 +5,13 @@ import sessions from "./sessions"
 // Shown to the user on the instance's authorization screen and listed under
 // their account's "Authorized apps".
 const APP_NAME = "tootsearch.github.io"
-// `read` covers everything this app needs — own statuses, favourites and
-// bookmarks — and nothing it doesn't (no write/follow/push).
-const SCOPE = "read"
+// The minimal granular read scopes for exactly the four endpoints this app
+// calls: read:accounts (verifyCredentials), read:statuses (own posts/boosts,
+// incl. private), read:favourites and read:bookmarks. Narrower than the blanket
+// `read`, so the instance's consent screen names just these instead of "read
+// all your data". Changing this re-registers the app (see app.scope check
+// below) and existing tokens, bound to the old scope, need re-authorization.
+const SCOPE = "read:accounts read:statuses read:favourites read:bookmarks"
 
 // Accept anything the user might paste — `user@instance`, `@user@instance`,
 // `instance.tld`, or a full `https://instance` URL — and reduce it to the
