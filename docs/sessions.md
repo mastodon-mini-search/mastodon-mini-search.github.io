@@ -89,16 +89,28 @@ interface SessionRegistry {
 
 > token 存在 `store.account.apiKey`（随 `StatusStore` / 注册表持久化在本机）。
 > `fetchStatuses` 用它建带 token 的客户端：自己的嘟文按 `statusMinId` 增量抓。
-> 喜欢/书签的分页游标是实例内部 id（只在 Link 头里、不在返回的 status 上），
-> 没法按 status id 续抓，所以从最新往下翻，遇到「整页都是本类型已存过的」即停
-> （首次空 store 会全量拉一遍）。没有 token 时只抓公开嘟文，跳过喜欢/书签。
+> 没有 token 时只抓公开嘟文，跳过喜欢/书签。
 >
-> 三类都**每页落盘**，所以任一类中途失败都能续传：嘟文靠 `statusMinId`，喜欢/书签
-> 靠从 Link 头里读出的下一页 `max_id`（存进 `position.favouriteMaxId` /
-> `bookmarkMaxId`）。游标为 `'0'` 表示「无进行中的抓取、从最新开始」；为真实 id
-> 表示「上次中断了，从这继续往下补」，干净跑完后清回 `'0'`。读不到 `max_id` 时退回
-> 「只在结尾存一次」（不带游标地中途落盘会让重载后从顶部重来、在第一张已知页就提前
-> 截断回补）。
+> 喜欢/书签没有可续抓的 status-id 游标——它们按实例内部 record id 分页，而这个 id
+> 只在 Link 头里、不在返回的 status 上。所以每类各跑**两段、各自可断点续传**，都按
+> Link 头的下一页 `max_id`（`nextMaxId` 从 paginator 私有 `nextParams` 读出）由新到旧
+> 翻页，游标存在 `position.favourite` / `position.bookmark`（`MarkedPosition =
+> { backfill, catchup }`）：
+>
+> 1. **backfill（回补到最旧）**：把整串从头翻到底一次。`'top'` 是全新未开始；
+>    `{ maxId }` 是上次中断、从那续；`'done'` 是已翻到底。每页推进并落盘，中途失败下次
+>    从存的 `maxId` 接续、不重抓；翻到底后置 `'done'`。
+> 2. **catchup（追最新，仅在 backfill 为 `'done'` 后跑）**：从顶端往下翻，直到某页整页
+>    都是本类型已存过的（追回已覆盖区）或翻到底为止。它也每页落盘自己的 `{ maxId }`，
+>    同样可断点续传、不重抓已拿到的页；干净跑完清回 `'idle'`。
+>
+> 两个游标，是因为两段各有独立的活动前缘——同一段连续覆盖区的顶端与底端。唯一残留
+> 缺口：catchup 中断**期间**在最顶新加的嘟文，要等下一趟 catchup 从顶端重起才补上，
+> 窗口很窄、会自愈。读不到 `max_id` 时该页不落盘，退回下一次保存。
+>
+> 迁移：旧版每类只有单个 `${type}MaxId` 游标。`'0'`（已完成或从未跑）视作 backfill 已
+> `'done'`（避免老用户重抓全部），真实 id 视作中断的 backfill 续传；首次抓取时由
+> `fetchStatuses` 就地折进新的两游标结构。
 
 ## 迁移
 

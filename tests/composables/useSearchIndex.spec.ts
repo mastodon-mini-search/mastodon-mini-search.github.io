@@ -20,7 +20,11 @@ function storeWith(contents: Record<string, string>): StatusStore {
   }
   return {
     account: { instanceUrl: 'https://a.social', acct: 'tester', accountId: '1' },
-    position: { statusMinId: '0', favouriteMaxId: '0', bookmarkMaxId: '0' },
+    position: {
+      statusMinId: '0',
+      favourite: { backfill: 'top', catchup: 'idle' },
+      bookmark: { backfill: 'top', catchup: 'idle' }
+    },
     statuses,
   }
 }

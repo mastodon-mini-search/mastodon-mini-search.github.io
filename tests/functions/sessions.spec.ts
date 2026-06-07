@@ -210,7 +210,11 @@ describe('SessionRepository', () => {
     // Seed the pre-multi-account layout: one StatusStore under 'store'.
     const legacy: StatusStore = {
       account: accounts['alice@a.social'],
-      position: { statusMinId: '5', favouriteMaxId: '0', bookmarkMaxId: '0' },
+      position: {
+        statusMinId: '5',
+        favourite: { backfill: 'done', catchup: 'idle' },
+        bookmark: { backfill: 'done', catchup: 'idle' }
+      },
       statuses: { 'uri-old': { content: 'old', createdAt: '', types: ['post'], acct: 'alice@a.social', id: '7' } }
     }
     await kv.setItem('store', legacy)

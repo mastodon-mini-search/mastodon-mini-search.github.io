@@ -48,7 +48,11 @@ function emptyStore(account: ResolvedAccountSetting): StatusStore {
   return {
     account,
     statuses: {},
-    position: { statusMinId: '0', favouriteMaxId: '0', bookmarkMaxId: '0' }
+    position: {
+      statusMinId: '0',
+      favourite: { backfill: 'top', catchup: 'idle' },
+      bookmark: { backfill: 'top', catchup: 'idle' }
+    }
   }
 }
 

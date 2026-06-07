@@ -1,6 +1,8 @@
 import { createRestAPIClient, mastodon } from "masto"
-import { StatusStore, StatusType } from "../models/StatusStore"
+import { StatusStore, StatusType, MarkedPosition } from "../models/StatusStore"
 import sessions from "./sessions"
+
+type MarkedType = 'favourite' | 'bookmark'
 
 function saveAuthor(store: StatusStore, account: mastodon.v1.Account) {
   if (!store.authors) {
@@ -106,57 +108,115 @@ export function nextMaxId(paginator: AsyncIterable<unknown>): string | undefined
   return new URLSearchParams(params).get('max_id') ?? undefined
 }
 
-// Favourites and bookmarks resume by the Link-header max_id (see nextMaxId),
-// persisted in `store.position[cursor]`. Each run walks newest-first: from the
-// saved cursor if a run was interrupted (keep backfilling older entries), else
-// from the top. It stops at the first page that's entirely statuses we've already
-// stored under this type (caught up to a previously-completed block) or at the
-// empty page past the end, then clears the cursor so the next run starts fresh
-// from the top (first run on an empty store has nothing known, so it pulls the
-// whole list). Persisting the cursor + store after each page makes a mid-run
-// failure resumable; the one gap is entries added at the very top *during* an
-// interruption window, which a later top-walk picks up.
+// Store one page of a marked category, returning whether every status was already
+// known under this type — the signal a catch-up has reached covered ground.
+function storePage(store: StatusStore, page: mastodon.v1.Status[], type: MarkedType): boolean {
+  let allKnown = true
+  page.forEach(status => {
+    const known = !!store.statuses[status.uri] && store.statuses[status.uri].types.includes(type)
+    saveStatus(store, status)
+    markType(store, status.uri, type)
+    if (!known) {
+      allKnown = false
+    }
+  })
+  return allKnown
+}
+
+// Read a category's two cursors, migrating a legacy single-cursor `${type}MaxId`
+// in place. Old '0' meant "completed (or never started)" — treat as a finished
+// backfill so existing users don't re-pull their whole list; a real id was an
+// interrupted backfill, so resume it. Neither field present = a brand-new store.
+function markedPosition(store: StatusStore, type: MarkedType): MarkedPosition {
+  const pos = store.position as unknown as {
+    favourite?: MarkedPosition
+    bookmark?: MarkedPosition
+    favouriteMaxId?: string
+    bookmarkMaxId?: string
+  }
+  let cur = pos[type]
+  if (!cur) {
+    const legacy = pos[`${type}MaxId`]
+    cur =
+      typeof legacy === 'string' && legacy !== '0'
+        ? { backfill: { maxId: legacy }, catchup: 'idle' }
+        : { backfill: legacy === '0' ? 'done' : 'top', catchup: 'idle' }
+    pos[type] = cur
+    delete pos[`${type}MaxId`]
+  }
+  return cur
+}
+
+// Favourites/bookmarks are fetched in two independently-resumable passes, both
+// paging newest→oldest by the Link-header max_id (see nextMaxId):
+//
+//   1. Backfill — pull the whole list once, top→bottom. 'top' starts a fresh
+//      sync; a saved cursor resumes an interrupted one. Each page advances and
+//      persists the cursor, so a mid-run failure resumes without re-fetching;
+//      reaching the end flips it to 'done'.
+//   2. Catch-up (only once backfill is 'done') — pull entries newer than what we
+//      have: walk from the top until a page is entirely already-stored (caught up
+//      to the covered region) or the list ends. It persists its own cursor per
+//      page too, so it's resumable without re-fetching the pages already pulled.
+//
+// Two cursors, because the passes have separate live frontiers — the top and the
+// bottom of one contiguous covered block. The lone residual gap: entries added at
+// the very top *during* a catch-up interruption are skipped until the next run
+// starts catch-up fresh from the top — a narrow, self-healing window.
 export async function fetchMarked(
   store: StatusStore,
   open: (maxId: string | undefined) => AsyncIterable<mastodon.v1.Status[]>,
-  type: StatusType,
-  cursor: 'favouriteMaxId' | 'bookmarkMaxId',
+  type: MarkedType,
   afterBatch?: () => void
 ) {
-  const pending = store.position[cursor]
-  const pages = open(pending && pending !== '0' ? pending : undefined)
+  const pos = markedPosition(store, type)
+
+  if (pos.backfill !== 'done') {
+    const pages = open(pos.backfill === 'top' ? undefined : pos.backfill.maxId)
+    for await (const page of pages) {
+      if (page.length == 0) {
+        break
+      }
+      storePage(store, page, type)
+      if (afterBatch) {
+        afterBatch()
+      }
+      // The paginator has already advanced to the next page's Link, so this is the
+      // max_id for the page *after* the one we just stored — where a resume picks
+      // up. If unreadable, leave the cursor and fall back to the next save.
+      const next = nextMaxId(pages)
+      if (next !== undefined) {
+        pos.backfill = { maxId: next }
+        await sessions.saveStore(store)
+      }
+    }
+    pos.backfill = 'done'
+    await sessions.saveStore(store)
+  }
+
+  // Backfill is 'done' now (already, or just finished above), so catch up the top.
+  const pages = open(pos.catchup === 'idle' ? undefined : pos.catchup.maxId)
   for await (const page of pages) {
     if (page.length == 0) {
       break
     }
-    let allKnown = true
-    page.forEach(status => {
-      const known = !!store.statuses[status.uri] && store.statuses[status.uri].types.includes(type)
-      saveStatus(store, status)
-      markType(store, status.uri, type)
-      if (!known) {
-        allKnown = false
-      }
-    })
+    const allKnown = storePage(store, page, type)
     if (afterBatch) {
       afterBatch()
     }
     if (allKnown) {
       break
     }
-    // The paginator has already advanced to the next page's Link, so this is the
-    // max_id for the page *after* the one we just stored — exactly where a resume
-    // should pick up. If we can't read it, skip the per-page save and fall back
-    // to the single save at the end: persisting mid-walk without a cursor would
-    // let a reload restart from the top and cut the backfill short at the first
-    // all-known page.
     const next = nextMaxId(pages)
     if (next !== undefined) {
-      store.position[cursor] = next
+      pos.catchup = { maxId: next }
       await sessions.saveStore(store)
     }
   }
-  store.position[cursor] = '0'
+  // Reached the covered region, the bottom, or the end of the paginator — all mean
+  // caught up; restart from the top next run. A failure throws out before here,
+  // leaving the last persisted cursor to resume from.
+  pos.catchup = 'idle'
   await sessions.saveStore(store)
 }
 
@@ -184,7 +244,6 @@ export async function fetchFavourites(store: StatusStore, afterBatch?: () => voi
     store,
     maxId => c.v1.favourites.list(maxId ? { limit: 40, maxId } : { limit: 40 }),
     'favourite',
-    'favouriteMaxId',
     afterBatch
   )
 }
@@ -198,7 +257,6 @@ export async function fetchBookmarks(store: StatusStore, afterBatch?: () => void
     store,
     maxId => c.v1.bookmarks.list(maxId ? { limit: 40, maxId } : { limit: 40 }),
     'bookmark',
-    'bookmarkMaxId',
     afterBatch
   )
 }

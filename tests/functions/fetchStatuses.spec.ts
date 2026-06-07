@@ -1,27 +1,32 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mastodon } from 'masto'
 import { fetchMarked, nextMaxId } from '../../src/functions/fetchStatuses'
-import { StatusStore } from '../../src/models/StatusStore'
+import { StatusStore, MarkedPosition } from '../../src/models/StatusStore'
 import sessions from '../../src/functions/sessions'
 
 // A stand-in for masto's PaginatorHttp. The real one keeps the *next* page's
 // Link in a private `nextParams` query string, updated each time a page is
 // fetched; fetchMarked reads max_id out of it to persist a resume cursor. We
-// model just that: yield the given pages, and after each one expose the matching
-// `nextParams` (or undefined to simulate a missing/unreadable Link).
+// model just that: yield the given pages, exposing the matching `nextParams`
+// after each (or undefined for a missing/unreadable Link), and optionally throw
+// part-way to simulate a network failure mid-walk.
 class FakePaginator implements AsyncIterable<mastodon.v1.Status[]> {
   nextParams: string | undefined
   calls = 0
   private i = 0
   constructor(
     private pages: mastodon.v1.Status[][],
-    private cursors: (string | undefined)[]
+    private cursors: (string | undefined)[],
+    private throwAfter?: number // throw on the next() once this many pages were yielded
   ) {}
   [Symbol.asyncIterator]() {
     return this
   }
   async next(): Promise<IteratorResult<mastodon.v1.Status[]>> {
     this.calls++
+    if (this.throwAfter !== undefined && this.i >= this.throwAfter) {
+      throw new Error('network')
+    }
     if (this.i >= this.pages.length) {
       this.nextParams = undefined
       return { done: true, value: undefined as never }
@@ -32,6 +37,21 @@ class FakePaginator implements AsyncIterable<mastodon.v1.Status[]> {
     this.i++
     return { done: false, value: page }
   }
+}
+
+// fetchMarked opens a paginator once per pass (backfill, then catch-up). Hand out
+// the given paginators in order and record the max_id each open was called with,
+// so a test can assert *where* each pass started (top = undefined vs a cursor).
+function opener(paginators: FakePaginator[]) {
+  const opened: (string | undefined)[] = []
+  let i = 0
+  const open = (maxId: string | undefined) => {
+    opened.push(maxId)
+    const p = paginators[i++]
+    if (!p) throw new Error(`unexpected open #${i} (maxId=${String(maxId)})`)
+    return p
+  }
+  return { open, opened }
 }
 
 function fakeStatus(uri: string, id: string): mastodon.v1.Status {
@@ -52,22 +72,29 @@ function fakeStatus(uri: string, id: string): mastodon.v1.Status {
   } as unknown as mastodon.v1.Status
 }
 
-function makeStore(favouriteMaxId = '0'): StatusStore {
+function makeStore(favourite: MarkedPosition = { backfill: 'top', catchup: 'idle' }): StatusStore {
   return {
     account: {} as never,
-    position: { statusMinId: '0', favouriteMaxId, bookmarkMaxId: '0' },
+    position: { statusMinId: '0', favourite, bookmark: { backfill: 'top', catchup: 'idle' } },
     statuses: {}
   }
 }
 
-// Cursor value seen by saveStore at each call, captured at call time (the store
-// is mutated in place, so we snapshot synchronously inside the spy).
-let savedCursors: string[]
+// Pre-seed an already-stored favourite, so a catch-up reaching it sees a fully
+// known page (its stop signal).
+function seedFavourite(store: StatusStore, uri: string, id: string) {
+  store.statuses[uri] = { content: 'x', createdAt: '', types: ['favourite'], acct: 'tester', id }
+}
+
+// The favourite cursor pair as persisted at each save, snapshotted at call time
+// (the store is mutated in place; each assignment makes a fresh cursor object, so
+// a shallow clone is a faithful point-in-time copy).
+let saved: MarkedPosition[]
 
 beforeEach(() => {
-  savedCursors = []
+  saved = []
   vi.spyOn(sessions, 'saveStore').mockImplementation(async (s: StatusStore) => {
-    savedCursors.push(s.position.favouriteMaxId)
+    saved.push({ ...s.position.favourite })
   })
 })
 
@@ -75,69 +102,152 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('fetchMarked resume cursor', () => {
-  it('walks from the top, saves each page cursor, then clears on completion', async () => {
-    const store = makeStore('0')
-    let openedWith: string | undefined | 'UNSET' = 'UNSET'
-    const paginator = new FakePaginator(
-      [
-        [fakeStatus('u1', '1'), fakeStatus('u2', '2')],
-        [fakeStatus('u3', '3'), fakeStatus('u4', '4')],
-        [] // end
-      ],
-      ['c1', 'c2', undefined]
-    )
+describe('fetchMarked — backfill pass', () => {
+  it('first sync backfills from the top to the bottom, then catches up', async () => {
+    const store = makeStore()
+    const { open, opened } = opener([
+      new FakePaginator(
+        [[fakeStatus('u1', '1'), fakeStatus('u2', '2')], [fakeStatus('u3', '3')], []],
+        ['c1', 'c2', undefined]
+      ),
+      new FakePaginator([[fakeStatus('u1', '1')]], ['cx']) // catch-up: page already known
+    ])
 
-    await fetchMarked(store, maxId => { openedWith = maxId; return paginator }, 'favourite', 'favouriteMaxId')
+    await fetchMarked(store, open, 'favourite')
 
-    expect(openedWith).toBeUndefined() // '0' cursor → start from the top
-    expect(Object.keys(store.statuses).sort()).toEqual(['u1', 'u2', 'u3', 'u4'])
+    expect(opened).toEqual([undefined, undefined]) // backfill from top, then catch-up from top
+    expect(Object.keys(store.statuses).sort()).toEqual(['u1', 'u2', 'u3'])
     expect(store.statuses['u1'].types).toContain('favourite')
-    // c1/c2 persisted per page, then cleared back to '0' on the empty page.
-    expect(savedCursors).toEqual(['c1', 'c2', '0'])
-    expect(store.position.favouriteMaxId).toBe('0')
+    expect(store.position.favourite).toEqual({ backfill: 'done', catchup: 'idle' })
   })
 
-  it('resumes from the saved cursor instead of the top', async () => {
-    const store = makeStore('resume-me')
-    let openedWith: string | undefined | 'UNSET' = 'UNSET'
-    const paginator = new FakePaginator([[fakeStatus('u5', '5')], []], ['c3', undefined])
+  it('resumes an interrupted backfill from its saved cursor, not the top', async () => {
+    const store = makeStore({ backfill: { maxId: 'resume-me' }, catchup: 'idle' })
+    const { open, opened } = opener([
+      new FakePaginator([[fakeStatus('u5', '5')], []], ['c3', undefined]),
+      new FakePaginator([[fakeStatus('u5', '5')]], ['cx']) // catch-up all-known
+    ])
 
-    await fetchMarked(store, maxId => { openedWith = maxId; return paginator }, 'favourite', 'favouriteMaxId')
+    await fetchMarked(store, open, 'favourite')
 
-    expect(openedWith).toBe('resume-me')
-    expect(savedCursors).toEqual(['c3', '0'])
-    expect(store.position.favouriteMaxId).toBe('0')
+    expect(opened).toEqual(['resume-me', undefined])
+    expect(store.statuses['u5'].types).toContain('favourite')
+    expect(store.position.favourite).toEqual({ backfill: 'done', catchup: 'idle' })
   })
 
-  it('stops at the first all-known page and clears the cursor', async () => {
-    const store = makeStore('0')
-    // Pre-seed u1 as an already-stored favourite, so page 0 is entirely known.
-    store.statuses['u1'] = { content: 'x', createdAt: '', types: ['favourite'], acct: 'tester', id: '1' }
-    const paginator = new FakePaginator(
-      [[fakeStatus('u1', '1')], [fakeStatus('u2', '2')]],
-      ['c1', 'c2']
-    )
+  it('keeps the last cursor when a backfill fails, so it resumes without re-fetching', async () => {
+    const store = makeStore()
+    const { open } = opener([
+      new FakePaginator(
+        [[fakeStatus('u1', '1')], [fakeStatus('u2', '2')]],
+        ['c1', 'c2'],
+        1 // throw after one page
+      )
+    ])
 
-    await fetchMarked(store, () => paginator, 'favourite', 'favouriteMaxId')
+    await expect(fetchMarked(store, open, 'favourite')).rejects.toThrow()
 
-    expect(paginator.calls).toBe(1) // fetched page 0 only, then stopped
-    expect(store.statuses['u2']).toBeUndefined() // never reached page 1
-    // No per-page save before the all-known break — only the final clear.
-    expect(savedCursors).toEqual(['0'])
-    expect(store.position.favouriteMaxId).toBe('0')
+    expect(store.statuses['u1']).toBeDefined()
+    expect(store.statuses['u2']).toBeUndefined() // never reached
+    // Last persisted state is the resume point; catch-up never ran.
+    expect(saved.at(-1)).toEqual({ backfill: { maxId: 'c1' }, catchup: 'idle' })
+    expect(store.position.favourite).toEqual({ backfill: { maxId: 'c1' }, catchup: 'idle' })
+  })
+})
+
+describe('fetchMarked — catch-up pass', () => {
+  it('walks from the top and stops at the first all-known page', async () => {
+    const store = makeStore({ backfill: 'done', catchup: 'idle' })
+    seedFavourite(store, 'u1', '1') // covered region
+    const { open, opened } = opener([
+      new FakePaginator([[fakeStatus('u9', '9')], [fakeStatus('u1', '1')]], ['c9', 'c1'])
+    ])
+
+    await fetchMarked(store, open, 'favourite')
+
+    expect(opened).toEqual([undefined]) // backfill done → only catch-up, from the top
+    expect(store.statuses['u9'].types).toContain('favourite') // new top entry pulled
+    expect(store.position.favourite).toEqual({ backfill: 'done', catchup: 'idle' })
   })
 
-  it('falls back to a single end-save when max_id is unreadable', async () => {
-    const store = makeStore('0')
-    const paginator = new FakePaginator([[fakeStatus('u1', '1')], []], [undefined, undefined])
+  it('resumes an interrupted catch-up from its cursor, not the top', async () => {
+    const store = makeStore({ backfill: 'done', catchup: { maxId: 'mid' } })
+    seedFavourite(store, 'u1', '1')
+    const { open, opened } = opener([
+      new FakePaginator([[fakeStatus('u8', '8')], [fakeStatus('u1', '1')]], ['c8', 'c1'])
+    ])
 
-    await fetchMarked(store, () => paginator, 'favourite', 'favouriteMaxId')
+    await fetchMarked(store, open, 'favourite')
 
-    // nextParams unreadable → no mid-walk cursor saves, just the final clear.
-    expect(savedCursors).toEqual(['0'])
-    expect(store.statuses['u1'].types).toContain('favourite') // still stored
-    expect(store.position.favouriteMaxId).toBe('0')
+    expect(opened).toEqual(['mid']) // resumed from the saved catch-up cursor
+    expect(store.statuses['u8']).toBeDefined()
+    expect(store.position.favourite).toEqual({ backfill: 'done', catchup: 'idle' })
+  })
+
+  it('keeps the last cursor when a catch-up fails, so it resumes without re-fetching', async () => {
+    const store = makeStore({ backfill: 'done', catchup: 'idle' })
+    const { open } = opener([
+      new FakePaginator([[fakeStatus('u7', '7')], [fakeStatus('u6', '6')]], ['c7', 'c6'], 1)
+    ])
+
+    await expect(fetchMarked(store, open, 'favourite')).rejects.toThrow()
+
+    expect(store.statuses['u7']).toBeDefined()
+    expect(saved.at(-1)).toEqual({ backfill: 'done', catchup: { maxId: 'c7' } })
+    expect(store.position.favourite).toEqual({ backfill: 'done', catchup: { maxId: 'c7' } })
+  })
+})
+
+describe('fetchMarked — backfill then catch-up in one run', () => {
+  it('after the backfill reaches the bottom, the same run catches up new top entries', async () => {
+    const store = makeStore({ backfill: { maxId: 'resume' }, catchup: 'idle' })
+    seedFavourite(store, 'old', '50') // top of the covered region
+    const { open, opened } = opener([
+      new FakePaginator([[fakeStatus('older', '1')], []], ['cb', undefined]), // backfill to bottom
+      new FakePaginator(
+        [[fakeStatus('fresh', '99')], [fakeStatus('old', '50')]],
+        ['cf', 'cold']
+      ) // catch-up: a new top entry, then the covered region
+    ])
+
+    await fetchMarked(store, open, 'favourite')
+
+    expect(opened).toEqual(['resume', undefined])
+    expect(store.statuses['older']).toBeDefined() // backfilled below
+    expect(store.statuses['fresh']).toBeDefined() // caught up above, same run — the closed gap
+    expect(store.position.favourite).toEqual({ backfill: 'done', catchup: 'idle' })
+  })
+})
+
+describe('fetchMarked — legacy single-cursor migration', () => {
+  it('migrates a completed cursor (0) to a finished backfill', async () => {
+    const store = makeStore()
+    const pos = store.position as unknown as Record<string, unknown>
+    delete pos.favourite // simulate an old store: flat field, no two-cursor shape
+    pos.favouriteMaxId = '0'
+    const { open, opened } = opener([new FakePaginator([[]], [undefined])]) // catch-up from top, empty
+
+    await fetchMarked(store, open, 'favourite')
+
+    expect(opened).toEqual([undefined]) // backfill 'done' → only catch-up ran
+    expect(store.position.favourite).toEqual({ backfill: 'done', catchup: 'idle' })
+    expect(pos.favouriteMaxId).toBeUndefined() // legacy field cleaned up
+  })
+
+  it('migrates an interrupted cursor (real id) to a resumable backfill', async () => {
+    const store = makeStore()
+    const pos = store.position as unknown as Record<string, unknown>
+    delete pos.favourite
+    pos.favouriteMaxId = 'half-done'
+    const { open, opened } = opener([
+      new FakePaginator([[]], [undefined]), // backfill resumes from 'half-done', already at bottom
+      new FakePaginator([[]], [undefined]) // catch-up from top, empty
+    ])
+
+    await fetchMarked(store, open, 'favourite')
+
+    expect(opened).toEqual(['half-done', undefined])
+    expect(store.position.favourite).toEqual({ backfill: 'done', catchup: 'idle' })
   })
 })
 
