@@ -1,5 +1,5 @@
 import { StatusStore, StatusDocument } from "../models/StatusStore"
-import { PersistedIndex, FlatIndexData } from "../models/PersistedIndex"
+import { PersistedIndex } from "../models/PersistedIndex"
 import stripHTML from "./stripHTML"
 import { FlatIndexBuilder, FlatIndexView, loadFlatIndex } from "./flatIndex"
 
@@ -95,13 +95,25 @@ export function toPersistedIndex(store: StatusStore, index: FlatIndexBuilder): P
   return persistIndex(Object.keys(store.statuses).length, index)
 }
 
-// Restore a read-only searchable index from a serialized bundle — a cache blob,
-// or the engine's build output. Runs wherever the index lives (the worker in
-// production, never the main thread). Throws on an inconsistent / truncated
-// bundle, which the engine turns into a rebuild. Cheap: it wraps the buffers in
-// typed-array views with no reconstruction (the cold-start win — see flatIndex).
-export function loadIndex(data: FlatIndexData): FlatIndexView {
-  return loadFlatIndex(data)
+// Restore a read-only searchable index from a cached bundle. Runs wherever the
+// index lives (the worker in production, never the main thread). Throws on an
+// inconsistent / truncated bundle, which the engine turns into a rebuild. Cheap:
+// it wraps the buffers in typed-array views with no reconstruction (the
+// cold-start win — see flatIndex).
+//
+// Beyond the view's own internal-consistency check, this cross-checks that the
+// buffers actually cover the documentCount the cache *claims* — the count
+// cacheMatches gated against the store. Without it, a blob whose metadata count
+// matches the store but whose doc table doesn't (a corrupt/skewed write) would
+// pass both gates and be served as a valid-but-wrong (e.g. empty) index.
+export function loadIndex(persisted: PersistedIndex): FlatIndexView {
+  const view = loadFlatIndex(persisted)
+  if (view.documentCount !== persisted.documentCount) {
+    throw new Error(
+      `index document count mismatch: cache claims ${persisted.documentCount}, buffers hold ${view.documentCount}`
+    )
+  }
+  return view
 }
 
 // Whether a cached blob is worth wrapping for this store: same app version and

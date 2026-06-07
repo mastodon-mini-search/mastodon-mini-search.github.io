@@ -44,6 +44,18 @@ describe('IndexHolder', () => {
     expect(holder.search('foo')).toEqual([])
   })
 
+  it('restore rejects a bundle whose declared count disagrees with its buffers', () => {
+    // The blob passes the cheap version+count gate (cacheMatches compares this
+    // documentCount to the store), but its doc table holds a different number —
+    // a corrupt / skewed write that must not be served as a valid index.
+    const built = new IndexHolder()
+    const lying = { ...built.build(docs), documentCount: 5 } // buffers hold 2
+
+    const holder = new IndexHolder()
+    expect(holder.restore(lying)).toBe(false)
+    expect(holder.search('foo')).toEqual([])
+  })
+
   it('grow adds only the docs not already held and re-caches the larger index', () => {
     const holder = new IndexHolder()
     holder.build([docs[0]]) // just 'a'

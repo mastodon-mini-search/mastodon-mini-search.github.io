@@ -245,23 +245,73 @@ export class FlatIndexView implements IndexView {
     this.documentCount = this.uriOffsets.length - 1
     this.termCount = this.termOffsets.length - 1
 
-    // Corruption guard: a truncated / inconsistent bundle (a partial IndexedDB
-    // write) is rejected here so the caller rebuilds rather than serving garbage.
-    if (
-      this.documentCount < 0 ||
-      this.lengths.length !== this.documentCount ||
-      this.postingsOffsets.length !== this.termCount + 1 ||
-      this.postingsOffsets[this.termCount] !== this.postingDocs.length ||
-      this.postingDocs.length !== this.postingFreqs.length
-    ) {
-      throw new Error('FlatIndexView: inconsistent index buffers')
-    }
+    this.validate()
 
     let total = 0
     for (let i = 0; i < this.lengths.length; i++) {
       total += this.lengths[i]
     }
     this.avgFieldLength = this.documentCount ? total / this.documentCount : 0
+  }
+
+  // Corruption guard: reject a truncated / inconsistent bundle (a partial write,
+  // disk corruption, a format skew that slipped past the version gate) so the
+  // caller rebuilds rather than serving garbage — or returning out-of-range doc
+  // ids from a posting that points past the doc table. Every slice this view
+  // takes (uri / term / postings) and every doc id it dereferences is proven
+  // in-bounds here. O(terms + docs + postings), once, at restore.
+  //
+  // Note this validates the buffers are *internally* consistent; it does not
+  // know the declared documentCount metadata or the store — loadIndex cross-
+  // checks that the buffers cover the count the cache claims (see createIndex).
+  private validate(): void {
+    const fail = (why: string): never => {
+      throw new Error(`FlatIndexView: ${why}`)
+    }
+
+    // Offset arrays must start at 0, end at their backing length, and be
+    // monotonic non-decreasing — that makes every subarray slice valid.
+    const checkOffsets = (offsets: Int32Array, backingLength: number, name: string): void => {
+      if (offsets.length === 0 || offsets[0] !== 0 || offsets[offsets.length - 1] !== backingLength) {
+        fail(`${name} offsets don't span their buffer`)
+      }
+      for (let i = 1; i < offsets.length; i++) {
+        if (offsets[i] < offsets[i - 1]) {
+          fail(`${name} offsets not monotonic`)
+        }
+      }
+    }
+
+    if (this.documentCount < 0 || this.termCount < 0) {
+      fail('empty offset arrays')
+    }
+    checkOffsets(this.uriOffsets, this.uriBytes.length, 'uri')
+    checkOffsets(this.termOffsets, this.termBytes.length, 'term')
+    checkOffsets(this.postingsOffsets, this.postingDocs.length, 'postings')
+
+    if (
+      this.lengths.length !== this.documentCount ||
+      this.postingsOffsets.length !== this.termCount + 1 ||
+      this.postingDocs.length !== this.postingFreqs.length
+    ) {
+      fail('inconsistent array lengths')
+    }
+
+    // Every doc id a posting points at must be a real document, else a hit would
+    // carry an out-of-range (wrong / undefined) id.
+    for (let i = 0; i < this.postingDocs.length; i++) {
+      const doc = this.postingDocs[i]
+      if (doc < 0 || doc >= this.documentCount) {
+        fail('posting references a non-existent document')
+      }
+    }
+    // The fuzzy-scan term ids must be real terms.
+    for (let i = 0; i < this.nonCjkTermIds.length; i++) {
+      const t = this.nonCjkTermIds[i]
+      if (t < 0 || t >= this.termCount) {
+        fail('non-CJK term id out of range')
+      }
+    }
   }
 
   fieldLength(doc: number): number {

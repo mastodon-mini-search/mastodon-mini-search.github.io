@@ -53,6 +53,30 @@ describe('FlatIndexView round-trip', () => {
     // A field-length array that no longer matches the document count.
     expect(() => loadFlatIndex({ ...good, fieldLengths: new ArrayBuffer(0) })).toThrow()
   })
+
+  it('rejects a posting that points at a non-existent document', () => {
+    const builder = new FlatIndexBuilder()
+    builder.add(docs[0])
+    builder.add(docs[1])
+    const good = builder.serialize()
+
+    const postingDocs = new Int32Array(good.postingDocs.slice(0))
+    postingDocs[0] = 999 // out of [0, documentCount)
+    expect(() => loadFlatIndex({ ...good, postingDocs: postingDocs.buffer })).toThrow()
+  })
+
+  it('rejects non-monotonic offsets', () => {
+    const builder = new FlatIndexBuilder()
+    builder.add(docs[0])
+    builder.add(docs[1])
+    const good = builder.serialize()
+
+    const termOffsets = new Int32Array(good.termOffsets.slice(0))
+    expect(termOffsets.length).toBeGreaterThan(2)
+    // Shove an interior offset past a later one so the run decreases.
+    termOffsets[1] = termOffsets[termOffsets.length - 1]
+    expect(() => loadFlatIndex({ ...good, termOffsets: termOffsets.buffer })).toThrow()
+  })
 })
 
 describe('FlatIndexBuilder.fromData (grow after restore)', () => {
