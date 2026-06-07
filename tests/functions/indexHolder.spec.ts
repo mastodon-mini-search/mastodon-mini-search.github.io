@@ -28,14 +28,19 @@ describe('IndexHolder', () => {
     const persisted = built.build(docs)
 
     const restored = new IndexHolder()
-    expect(restored.restore(persisted.json)).toBe(true)
+    expect(restored.restore(persisted)).toBe(true)
     expect(ids(restored, '电脑')).toEqual(['a'])
     expect(ids(restored, 'foo')).toEqual(['b'])
   })
 
-  it('restore reports false on corrupt data and stays empty instead of throwing', () => {
+  it('restore reports false on a corrupt bundle and stays empty instead of throwing', () => {
+    const built = new IndexHolder()
+    // A truncated buffer (a partial IndexedDB write): the postings are gone but
+    // the offsets still claim them, so the consistency check rejects it.
+    const corrupt = { ...built.build(docs), postingDocs: new ArrayBuffer(0) }
+
     const holder = new IndexHolder()
-    expect(holder.restore('{not valid minisearch json')).toBe(false)
+    expect(holder.restore(corrupt)).toBe(false)
     expect(holder.search('foo')).toEqual([])
   })
 

@@ -1,4 +1,4 @@
-import type { SearchResult } from 'minisearch'
+import type { SearchHit } from '../models/SearchHit'
 import type { PersistedIndex } from '../models/PersistedIndex'
 import type { IndexEngine } from './indexEngine'
 import type { WorkerRequestBody, WorkerResponse, WorkerResult } from './indexWorkerProtocol'
@@ -43,10 +43,10 @@ export function createWorkerEngine(): IndexEngine {
   }
 
   return {
-    restore: (json) => call({ type: 'restore', json }) as Promise<boolean>,
+    restore: (data) => call({ type: 'restore', data }) as Promise<boolean>,
     build: (docs) => call({ type: 'build', docs }) as Promise<PersistedIndex>,
     grow: (docs) => call({ type: 'grow', docs }) as Promise<PersistedIndex>,
-    search: (query) => call({ type: 'search', query }) as Promise<SearchResult[]>,
+    search: (query) => call({ type: 'search', query }) as Promise<SearchHit[]>,
     // Fire-and-forget: the worker drops its index and sends no reply.
     clear: () => worker.postMessage({ type: 'clear', id: 0 }),
   }

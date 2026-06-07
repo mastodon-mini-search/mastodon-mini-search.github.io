@@ -1,5 +1,5 @@
 import { ref, shallowRef, reactive, computed, watch, onBeforeUnmount, Ref } from 'vue'
-import { SearchResult } from 'minisearch'
+import { SearchHit } from '../models/SearchHit'
 import { StatusStore } from '../models/StatusStore'
 import FilterState from '../models/FilterState'
 import SortOrder from '../models/SortOrder'
@@ -14,7 +14,7 @@ import SortOrder from '../models/SortOrder'
 // yet, and `store` is passed as a ref so the composable always sees the active
 // account's corpus without being recreated on every switch.
 export function useSearch(
-  search: (query: string) => Promise<SearchResult[]>,
+  search: (query: string) => Promise<SearchHit[]>,
   ready: Ref<boolean>,
   store: Ref<StatusStore | undefined>,
 ) {
@@ -23,7 +23,7 @@ export function useSearch(
   // the debounce instead of flashing "no match" on every keystroke.
   const text = ref('')
   const query = ref('')
-  const results = shallowRef<SearchResult[]>([])
+  const results = shallowRef<SearchHit[]>([])
   const searched = ref(false)
 
   const filter: FilterState = reactive({
@@ -39,7 +39,7 @@ export function useSearch(
 
   // Filter the raw results by the active type toggles, then order them. Lives here
   // (rather than inside Results) so the result count and empty states can react to
-  // it too. `search` already returns matches sorted by score (descending), so
+  // it too. `search` already returns matches sorted by BM25 score (descending), so
   // 'relevance' is just the filtered list as-is; 'newest'/'oldest' reorder by
   // createdAt (a same-format ISO UTC string, so a lexical compare is chronological).
   const filtered = computed(() => {

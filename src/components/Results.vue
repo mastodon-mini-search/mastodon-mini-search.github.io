@@ -8,12 +8,12 @@
 
 <script setup lang="ts">
 import { StatusStore } from '../models/StatusStore'
-import { SearchResult } from 'minisearch'
+import { SearchHit } from '../models/SearchHit'
 import ResultItem from './ResultItem.vue'
 
 defineProps<{
   store: StatusStore
-  results: SearchResult[]
+  results: SearchHit[]
 }>()
 </script>
 

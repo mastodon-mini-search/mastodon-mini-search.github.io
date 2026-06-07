@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { shallowRef } from 'vue'
-import type { SearchResult } from 'minisearch'
+import type { SearchHit } from '../../src/models/SearchHit'
 import { useSearchIndex } from '../../src/composables/useSearchIndex'
 import { createInProcessEngine } from '../../src/functions/indexEngine'
 import sessions from '../../src/functions/sessions'
@@ -10,7 +10,7 @@ import { PersistedIndex } from '../../src/models/PersistedIndex'
 
 // In production the index lives in a Web Worker; happy-dom can't run one, so we
 // inject the in-process engine. It goes through the real build / serialize /
-// loadJSON path, so the composable exercises the same orchestration the worker
+// restore path, so the composable exercises the same orchestration the worker
 // path does — just synchronously on this thread.
 
 function storeWith(contents: Record<string, string>): StatusStore {
@@ -25,7 +25,7 @@ function storeWith(contents: Record<string, string>): StatusStore {
   }
 }
 
-const found = async (search: (q: string) => Promise<SearchResult[]>, q: string) =>
+const found = async (search: (q: string) => Promise<SearchHit[]>, q: string) =>
   (await search(q)).map(r => String(r.id))
 
 // The cache layer is stubbed (no IndexedDB); the real engine build/restore/grow
@@ -85,8 +85,8 @@ describe('useSearchIndex', () => {
 
   it('load rebuilds when the cached blob is corrupt instead of failing', async () => {
     const store = storeWith({ a: '<p>alpha</p>' })
-    const corrupt = toPersistedIndex(store, createIndex(store))
-    corrupt.json = '{not valid minisearch json' // passes the version/count gate, fails to decode
+    // Passes the version/count gate, but a truncated buffer fails to wrap.
+    const corrupt = { ...toPersistedIndex(store, createIndex(store)), postingDocs: new ArrayBuffer(0) }
     loadIndex.mockResolvedValue(corrupt)
     const { ready, search, load } = useSearchIndex(shallowRef<StatusStore | undefined>(store), createInProcessEngine())
 

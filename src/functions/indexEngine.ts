@@ -1,4 +1,4 @@
-import type { SearchResult } from 'minisearch'
+import type { SearchHit } from '../models/SearchHit'
 import type { PersistedIndex } from '../models/PersistedIndex'
 import type { IndexDoc } from './createIndex'
 import { IndexHolder } from './indexHolder'
@@ -11,13 +11,13 @@ import { IndexHolder } from './indexHolder'
 export interface IndexEngine {
   // Load a cached serialized index. true if it loaded, false if it was corrupt
   // (caller rebuilds). The caller has already gated on version + document count.
-  restore(json: string): Promise<boolean>
+  restore(data: PersistedIndex): Promise<boolean>
   // Build from already-stripped docs, keep it live, and return the cache blob.
   build(docs: IndexDoc[]): Promise<PersistedIndex>
   // Add docs the live index doesn't hold, and return the updated cache blob.
   grow(docs: IndexDoc[]): Promise<PersistedIndex>
   // Query the live index (empty if there's none yet).
-  search(query: string): Promise<SearchResult[]>
+  search(query: string): Promise<SearchHit[]>
   // Drop the live index so it can't be searched against a new account.
   clear(): void
 }
@@ -27,7 +27,7 @@ export interface IndexEngine {
 export function createInProcessEngine(): IndexEngine {
   const holder = new IndexHolder()
   return {
-    restore: (json) => Promise.resolve(holder.restore(json)),
+    restore: (data) => Promise.resolve(holder.restore(data)),
     build: (docs) => Promise.resolve(holder.build(docs)),
     grow: (docs) => Promise.resolve(holder.grow(docs)),
     search: (query) => Promise.resolve(holder.search(query)),

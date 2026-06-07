@@ -1,5 +1,5 @@
 import { ref, Ref } from 'vue'
-import { SearchResult } from 'minisearch'
+import { SearchHit } from '../models/SearchHit'
 import { StatusStore } from '../models/StatusStore'
 import sessions from '../functions/sessions'
 import { extractDocs, cacheMatches } from '../functions/createIndex'
@@ -8,8 +8,8 @@ import { createWorkerEngine } from '../functions/indexWorkerEngine'
 
 // Owns the search index for the active account. The index itself lives behind an
 // IndexEngine — in production a Web Worker (createWorkerEngine) that holds the
-// MiniSearch off the main thread, so neither loadJSON (restoring a ~16MB cache)
-// nor search ever blocks the page. This composable only orchestrates it:
+// flat index off the main thread, so search never blocks the page (restoring a
+// cache is cheap now, but stays there too). This composable only orchestrates it:
 // restore-or-build on load, grow on fetch, drop on switch, and mirror which toots
 // are indexed. `store` is a ref so `grow` indexes whatever the active store
 // currently holds; `load` takes its store explicitly since the caller swaps it in
@@ -65,7 +65,7 @@ export function useSearchIndex(
       if (mine !== generation) {
         return
       }
-      if (cached && cacheMatches(s, cached) && await engine.restore(cached.json)) {
+      if (cached && cacheMatches(s, cached) && await engine.restore(cached)) {
         if (mine !== generation) {
           return
         }
@@ -133,7 +133,7 @@ export function useSearchIndex(
 
   // Run a query against the active account's index (off the main thread in
   // production). Resolves to empty if there's no index yet.
-  function search(query: string): Promise<SearchResult[]> {
+  function search(query: string): Promise<SearchHit[]> {
     return engine.search(query)
   }
 

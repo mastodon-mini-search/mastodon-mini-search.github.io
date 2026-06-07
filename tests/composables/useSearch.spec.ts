@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest'
 import { ref, shallowRef, nextTick, type Ref } from 'vue'
-import type { SearchResult } from 'minisearch'
+import type { SearchHit } from '../../src/models/SearchHit'
 import { useSearch } from '../../src/composables/useSearch'
 import createIndex from '../../src/functions/createIndex'
 import { StatusStore, StatusDocument, StatusType } from '../../src/models/StatusStore'
@@ -31,7 +31,7 @@ describe('useSearch', () => {
   // Search delegates to a real index but resolves asynchronously, mirroring the
   // worker-backed engine in production. Spying on it lets tests assert it was
   // (or wasn't) invoked.
-  let search: Mock<(query: string) => Promise<SearchResult[]>>
+  let search: Mock<(query: string) => Promise<SearchHit[]>>
 
   beforeEach(() => {
     // Fake timers keep the debounce deterministic across every test: scheduled
@@ -155,14 +155,14 @@ describe('useSearch', () => {
   it('drops an in-flight run whose result lands after reset (stale corpus guard)', async () => {
     // A search that resolves only when we say so, so reset() can land between the
     // call and its resolution — exactly the account-switch race.
-    let resolveSearch!: (rs: SearchResult[]) => void
-    const deferred = vi.fn((_q: string) => new Promise<SearchResult[]>(res => { resolveSearch = res }))
+    let resolveSearch!: (rs: SearchHit[]) => void
+    const deferred = vi.fn((_q: string) => new Promise<SearchHit[]>(res => { resolveSearch = res }))
     const [{ text, results, searched, runNow, reset }] = withSetup(() => useSearch(deferred, ready, storeRef))
 
     text.value = 'alpha'
     const pending = runNow() // search called, now awaiting
     reset()                  // supersedes the in-flight run
-    resolveSearch([{ id: 'a' } as unknown as SearchResult])
+    resolveSearch([{ id: 'a' } as unknown as SearchHit])
     await pending
 
     expect(results.value).toEqual([]) // stale result dropped, not published

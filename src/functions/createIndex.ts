@@ -1,35 +1,17 @@
-import MiniSearch, { Options } from "minisearch"
 import { StatusStore, StatusDocument } from "../models/StatusStore"
-import { PersistedIndex } from "../models/PersistedIndex"
+import { PersistedIndex, FlatIndexData } from "../models/PersistedIndex"
 import stripHTML from "./stripHTML"
-import isCJKWord from "./isCJKWord"
-import tokenize from "./tokenize"
+import { FlatIndexBuilder, FlatIndexView, loadFlatIndex } from "./flatIndex"
 
 // Bump whenever the indexing logic changes in a way that makes an index built by
-// an older build unusable by this one: the MiniSearch options below, the
-// tokenizer, or which text gets fed into `content` (body / CW / alt text …). A
-// persisted cache tagged with a different version is discarded and rebuilt.
-// MiniSearch's own serializationVersion only guards library upgrades, not our
-// content/tokenization changes — this version covers those.
-export const INDEX_VERSION = 1
-
-// The single source of truth for the index shape. Building and restoring MUST
-// use the same options — `loadJSON` rebuilds against whatever options it's given,
-// and custom functions (tokenize, fuzzy) aren't serialized, so they have to be
-// supplied identically here.
-const options: Options = {
-  fields: ['content'],
-  idField: 'uri',
-  tokenize,
-  searchOptions: {
-    combineWith: 'AND',
-    fuzzy(term) {
-      // CJK tokens are single chars / bigrams; fuzzy there is pure noise.
-      return isCJKWord(term) ? false : 0.35
-    },
-    maxFuzzy: 4
-  }
-}
+// an older build unusable by this one: the tokenizer, the search semantics
+// (searchFlat), the serialized format, or which text gets fed into `content`
+// (body / CW / alt text …). A persisted cache tagged with a different version is
+// discarded and rebuilt.
+//
+// v2: switched from a serialized MiniSearch blob to the flat ArrayBuffer index
+// (reconstruction-free restore). v1 MiniSearch caches fail this gate and rebuild.
+export const INDEX_VERSION = 2
 
 // The searchable text for one toot: the body plus the content warning and any
 // media alt text, so a toot is findable by its CW or by what's in an image's alt.
@@ -70,13 +52,15 @@ export function extractDocs(store: StatusStore, skip?: Set<string>): IndexDoc[] 
 
 // Build an index from already-extracted docs. DOM-free (the tokenizer only does
 // string work), so this is the half that runs in a worker — see indexHolder.ts.
-export function buildIndexFromDocs(docs: IndexDoc[]): MiniSearch {
-  const miniSearch = new MiniSearch(options)
-  miniSearch.addAll(docs)
-  return miniSearch
+export function buildIndexFromDocs(docs: IndexDoc[]): FlatIndexBuilder {
+  const index = new FlatIndexBuilder()
+  for (const doc of docs) {
+    index.add(doc)
+  }
+  return index
 }
 
-export default function(store: StatusStore): MiniSearch {
+export default function(store: StatusStore): FlatIndexBuilder {
   return buildIndexFromDocs(extractDocs(store))
 }
 
@@ -85,7 +69,7 @@ export default function(store: StatusStore): MiniSearch {
 // to grow the index with just the new toots after a fetch instead of rebuilding.
 // Operates on already-stripped docs, so it runs wherever the index lives (the
 // worker in production). Returns how many were added.
-export function indexDocs(index: MiniSearch, docs: IndexDoc[]): number {
+export function indexDocs(index: FlatIndexBuilder, docs: IndexDoc[]): number {
   let added = 0
   for (const doc of docs) {
     if (!index.has(doc.uri)) {
@@ -96,35 +80,35 @@ export function indexDocs(index: MiniSearch, docs: IndexDoc[]): number {
   return added
 }
 
-// Package a built index for persistence: its serialized form tagged with the
+// Package a built index for persistence: its flat buffer bundle tagged with the
 // current version and the document count it covers (the cheap restore check).
-export function persistIndex(documentCount: number, index: MiniSearch): PersistedIndex {
+export function persistIndex(documentCount: number, index: FlatIndexBuilder): PersistedIndex {
   return {
     version: INDEX_VERSION,
     documentCount: documentCount,
-    json: JSON.stringify(index)
+    ...index.serialize(),
   }
 }
 
 // Package a freshly built index for persistence alongside its store.
-export function toPersistedIndex(store: StatusStore, index: MiniSearch): PersistedIndex {
+export function toPersistedIndex(store: StatusStore, index: FlatIndexBuilder): PersistedIndex {
   return persistIndex(Object.keys(store.statuses).length, index)
 }
 
-// Reconstruct a searchable index from serialized JSON — the engine's build
-// output, or a cache blob. Runs wherever the index lives (the worker in
-// production, never the main thread). loadJSON must be given the same options the
-// index was built with, since custom functions (tokenize) aren't serialized;
-// throws on corrupt / incompatible data, which the engine turns into a rebuild.
-export function loadIndexJSON(json: string): MiniSearch {
-  return MiniSearch.loadJSON(json, options)
+// Restore a read-only searchable index from a serialized bundle — a cache blob,
+// or the engine's build output. Runs wherever the index lives (the worker in
+// production, never the main thread). Throws on an inconsistent / truncated
+// bundle, which the engine turns into a rebuild. Cheap: it wraps the buffers in
+// typed-array views with no reconstruction (the cold-start win — see flatIndex).
+export function loadIndex(data: FlatIndexData): FlatIndexView {
+  return loadFlatIndex(data)
 }
 
-// Whether a cached blob is worth decoding for this store: same app version and
+// Whether a cached blob is worth wrapping for this store: same app version and
 // same document count (toots are append-only, so a count match means the cache
 // still covers the same set). The cheap gate the main thread runs before handing
-// the json to the engine to actually loadJSON — decodability / corruption is the
-// engine's call (it loads in the worker and reports back whether it succeeded).
+// the buffers to the engine — decodability / corruption is the engine's call (it
+// wraps in the worker and reports back whether the bundle was consistent).
 export function cacheMatches(store: StatusStore, persisted: PersistedIndex): boolean {
   return persisted.version === INDEX_VERSION
     && persisted.documentCount === Object.keys(store.statuses).length

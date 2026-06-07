@@ -36,6 +36,24 @@ async function fakeResolve(acct: string): Promise<ResolvedAccountSetting> {
   return account
 }
 
+// A stand-in cached index. The repository stores it opaquely (validity is the
+// index layer's call), so the buffers need only round-trip, not be a real index.
+function fakeIndex(documentCount: number): PersistedIndex {
+  return {
+    version: 1,
+    documentCount,
+    uriBytes: new ArrayBuffer(0),
+    uriOffsets: new ArrayBuffer(0),
+    fieldLengths: new ArrayBuffer(0),
+    termBytes: new ArrayBuffer(0),
+    termOffsets: new ArrayBuffer(0),
+    postingsOffsets: new ArrayBuffer(0),
+    postingDocs: new ArrayBuffer(0),
+    postingFreqs: new ArrayBuffer(0),
+    nonCjkTermIds: new ArrayBuffer(0),
+  }
+}
+
 describe('SessionRepository', () => {
   let kv: ReturnType<typeof memoryKv>
   let repo: SessionRepository
@@ -116,7 +134,7 @@ describe('SessionRepository', () => {
   it('saveIndex / loadIndex round-trips a cached index, keyed per account', async () => {
     await repo.addSession('alice@a.social')
     const account = accounts['alice@a.social']
-    const cache: PersistedIndex = { version: 1, documentCount: 2, json: '{"v":1}' }
+    const cache: PersistedIndex = fakeIndex(2)
 
     await repo.saveIndex(account, cache)
     expect(await repo.loadIndex(account)).toEqual(cache)
@@ -132,7 +150,7 @@ describe('SessionRepository', () => {
   it('removeSession also deletes the derived index cache', async () => {
     await repo.addSession('alice@a.social')
     const account = accounts['alice@a.social']
-    await repo.saveIndex(account, { version: 1, documentCount: 0, json: '{}' })
+    await repo.saveIndex(account, fakeIndex(0))
 
     await repo.removeSession(storeKey(account))
     expect(kv.map.has(indexKey(account))).toBe(false)

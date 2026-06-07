@@ -42,13 +42,13 @@
 
 <script setup lang="ts">
 import { StatusStore, StatusType } from '../models/StatusStore'
-import { SearchResult } from 'minisearch'
+import { SearchHit } from '../models/SearchHit'
 import { computed, onMounted, ref } from 'vue'
 import highlight from '../functions/highlight'
 import relativeTime from '../functions/relativeTime'
 
 const props = defineProps<{
-  result: SearchResult
+  result: SearchHit
   store: StatusStore
 }>()
 
