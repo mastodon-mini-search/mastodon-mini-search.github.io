@@ -8,7 +8,7 @@
   <template v-else>
     <header class="topbar">
       <div class="brand">
-        <span class="logo" aria-hidden="true">🔍</span>
+        <img class="logo" src="/apple-touch-icon.png" alt="" width="24" height="24" />
         <span class="title">長毛象本地搜索</span>
       </div>
       <AccountSwitcher :account="store.account" @add="startAddAccount"/>
@@ -125,7 +125,10 @@ function startAddAccount() {
   gap: 0.5rem;
 }
 .logo {
-  font-size: 1.1rem;
+  display: block;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
 }
 .title {
   font-size: 1.05rem;
