@@ -10,8 +10,8 @@ export default async function(store: StatusStore, acct: string) {
     store.statuses = {}
     store.position = {
       statusMinId: '0',
-      favouriteMinId: '0',
-      bookmarkMinId: '0'
+      favouriteMaxId: '0',
+      bookmarkMaxId: '0'
     }
   }
 }

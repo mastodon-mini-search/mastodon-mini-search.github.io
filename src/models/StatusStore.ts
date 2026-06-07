@@ -23,9 +23,14 @@ export interface StatusDocument {
 }
 
 export interface LoadedPosition {
+  // Own posts resume by status id: the newest one seen, so we only pull newer.
   statusMinId: string
-  favouriteMinId: string
-  bookmarkMinId: string
+  // Favourites/bookmarks resume by the Link-header max_id of the next page to
+  // fetch — they have no status-id cursor (see fetchStatuses). '0' means "no run
+  // in progress, start from the top"; a real id means an interrupted run to
+  // continue backfilling from. Cleared back to '0' on clean completion.
+  favouriteMaxId: string
+  bookmarkMaxId: string
 }
 
 // Author info, normalized out of StatusDocument (which keeps `acct` as the

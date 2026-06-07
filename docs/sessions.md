@@ -88,10 +88,17 @@ interface SessionRegistry {
 （`beginLogin`，会跳转离开本页）与「免登入」（`addSession`，只搜公开嘟文）两条路。
 
 > token 存在 `store.account.apiKey`（随 `StatusStore` / 注册表持久化在本机）。
-> `fetchStatuses` 用它建带 token 的客户端：自己的嘟文按 `statusMinId` 增量抓；
+> `fetchStatuses` 用它建带 token 的客户端：自己的嘟文按 `statusMinId` 增量抓。
 > 喜欢/书签的分页游标是实例内部 id（只在 Link 头里、不在返回的 status 上），
 > 没法按 status id 续抓，所以从最新往下翻，遇到「整页都是本类型已存过的」即停
 > （首次空 store 会全量拉一遍）。没有 token 时只抓公开嘟文，跳过喜欢/书签。
+>
+> 三类都**每页落盘**，所以任一类中途失败都能续传：嘟文靠 `statusMinId`，喜欢/书签
+> 靠从 Link 头里读出的下一页 `max_id`（存进 `position.favouriteMaxId` /
+> `bookmarkMaxId`）。游标为 `'0'` 表示「无进行中的抓取、从最新开始」；为真实 id
+> 表示「上次中断了，从这继续往下补」，干净跑完后清回 `'0'`。读不到 `max_id` 时退回
+> 「只在结尾存一次」（不带游标地中途落盘会让重载后从顶部重来、在第一张已知页就提前
+> 截断回补）。
 
 ## 迁移
 

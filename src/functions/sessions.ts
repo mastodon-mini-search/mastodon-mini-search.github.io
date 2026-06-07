@@ -48,7 +48,7 @@ function emptyStore(account: ResolvedAccountSetting): StatusStore {
   return {
     account,
     statuses: {},
-    position: { statusMinId: '0', favouriteMinId: '0', bookmarkMinId: '0' }
+    position: { statusMinId: '0', favouriteMaxId: '0', bookmarkMaxId: '0' }
   }
 }
 
