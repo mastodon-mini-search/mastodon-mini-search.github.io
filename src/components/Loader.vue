@@ -23,6 +23,9 @@
         </button>
       </template>
     </div>
+    <p v-if="error" class="error" role="alert">
+      載入失敗：{{ error }}。已保留進度，再按一次即可從中斷處繼續。
+    </p>
   </div>
 </template>
 
@@ -69,9 +72,13 @@ function recount() {
 recount()
 
 // Which category is currently fetching, or '' when idle. Only one runs at a
-// time: each fetch persists the whole store on completion, so overlapping runs
-// would race the save. The active button shows a spinner; the rest disable.
+// time: each fetch persists the whole store, so overlapping runs would race the
+// save. The active button shows a spinner; the rest disable.
 const loading = ref<Category | ''>('')
+
+// The last fetch error, shown inline. Own posts persist per batch, so a failed
+// run keeps its progress — re-running resumes from where it stopped.
+const error = ref('')
 
 // Favourites and bookmarks need an OAuth token; without one only own posts are
 // reachable, so we hide those two buttons (and their tallies) entirely.
@@ -82,10 +89,18 @@ async function run(
   fetcher: (store: StatusStore, afterBatch?: () => void) => Promise<void>
 ) {
   loading.value = kind
+  error.value = ''
   try {
     await fetcher(props.store, recount)
+    // Only index on a clean finish so the on-disk index never references toots
+    // that weren't persisted (favourites/bookmarks save only at the end). Own
+    // posts persist per batch, so a failed run keeps its progress on disk; the
+    // next successful run indexes everything via grow()'s indexedUris diff.
     emit('loadComplete')
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
   } finally {
+    recount()
     loading.value = ''
   }
 }
@@ -133,6 +148,12 @@ async function run(
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+.error {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--danger);
 }
 .accent {
   display: inline-flex;

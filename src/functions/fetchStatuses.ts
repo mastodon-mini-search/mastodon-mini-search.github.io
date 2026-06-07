@@ -56,7 +56,12 @@ function client(store: StatusStore): mastodon.rest.Client {
 }
 
 // Own posts/boosts page cleanly by status id, so we resume from the newest one
-// seen (`statusMinId`) and only pull what's new.
+// seen (`statusMinId`) and only pull what's new. We persist after every batch
+// (not just at the end): the cursor advances per page, so if the run dies
+// mid-way — network drop, rate limit — the next one resumes from where it
+// stopped instead of restarting, and the toots fetched so far survive a reload.
+// Re-saving the whole store each batch is cheap relative to the network
+// round-trip it overlaps, and incremental runs only do a handful of batches.
 async function fetchOwnStatuses(
   store: StatusStore,
   masto: mastodon.rest.Client,
@@ -80,6 +85,7 @@ async function fetchOwnStatuses(
         }
       })
       store.position.statusMinId = batch[0].id
+      await sessions.saveStore(store)
       if (afterBatch) {
         afterBatch()
       }
@@ -123,11 +129,13 @@ async function fetchMarked(
 
 // Each category is fetched on its own, so the UI can pull posts quickly without
 // waiting on a possibly enormous favourites list, and re-run any one of them
-// independently. Each entry point persists the store once it's done.
+// independently. Own posts persist after every batch (so they're resumable);
+// favourites and bookmarks persist once, when done.
 
 export async function fetchPosts(store: StatusStore, afterBatch?: () => void) {
+  // No trailing save: fetchOwnStatuses already persisted every batch, so
+  // progress is durable whether this resolves or throws part-way through.
   await fetchOwnStatuses(store, client(store), afterBatch)
-  await sessions.saveStore(store)
 }
 
 // Favourites and bookmarks are private endpoints — only reachable with an OAuth
