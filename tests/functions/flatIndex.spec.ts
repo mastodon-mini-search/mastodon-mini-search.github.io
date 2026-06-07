@@ -77,6 +77,19 @@ describe('FlatIndexView round-trip', () => {
     termOffsets[1] = termOffsets[termOffsets.length - 1]
     expect(() => loadFlatIndex({ ...good, termOffsets: termOffsets.buffer })).toThrow()
   })
+
+  it('rejects an out-of-order term dictionary (binary search would mismatch)', () => {
+    const builder = new FlatIndexBuilder()
+    builder.add({ uri: 'dx', content: 'x' })
+    builder.add({ uri: 'dy', content: 'y' })
+    const good = builder.serialize()
+
+    // The dictionary is two one-byte terms, sorted: 'x' (0x78), 'y' (0x79).
+    expect(new Uint8Array(good.termBytes)).toEqual(new Uint8Array([0x78, 0x79]))
+    // Swap them to 'y','x' — offsets still valid, but now descending, so
+    // search('y') would binary-search to slot 1 ('x') and return doc dx.
+    expect(() => loadFlatIndex({ ...good, termBytes: new Uint8Array([0x79, 0x78]).buffer })).toThrow()
+  })
 })
 
 describe('FlatIndexBuilder.fromData (grow after restore)', () => {

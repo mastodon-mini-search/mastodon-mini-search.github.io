@@ -312,6 +312,23 @@ export class FlatIndexView implements IndexView {
         fail('non-CJK term id out of range')
       }
     }
+
+    // The dictionary must be strictly ascending in the same order getPostings
+    // binary-searches by (and hold no empty term) — otherwise a lookup walks to
+    // the wrong term and silently returns another term's postings (or misses).
+    // Decodes each term once: O(terms), the price of proving the binary search
+    // sound, the one structural invariant the rest of the checks don't cover.
+    let prev: string | undefined
+    for (let i = 0; i < this.termCount; i++) {
+      const term = this.termAt(i)
+      if (term.length === 0) {
+        fail('empty term in dictionary')
+      }
+      if (prev !== undefined && !(prev < term)) {
+        fail('term dictionary not strictly ascending')
+      }
+      prev = term
+    }
   }
 
   fieldLength(doc: number): number {
